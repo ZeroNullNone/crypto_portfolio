@@ -18,6 +18,7 @@ type SortDir = "asc" | "desc";
 type PortfolioChartMode = "line" | "asset" | "wallet" | "group";
 type PortfolioChartMetric = "balance" | "performance";
 const NUMERIC_KEYS: ReadonlySet<SortKey> = new Set(["bal", "d", "pct"]);
+const ASSET_PAGE_SIZE = 20;
 const CHART_RANGES = [
   { k: "7D", l: "1w" },
   { k: "30D", l: "1m" },
@@ -55,6 +56,7 @@ export function Dashboard() {
   const [chartMode, setChartMode] = useState<PortfolioChartMode>("line");
   const [chartRange, setChartRange] = useState<ChartRange>("30D");
   const [chartExpanded, setChartExpanded] = useState(false);
+  const [assetPage, setAssetPage] = useState(0);
 
   const summary = useApi(() => api.dashboardSummary(), [], "dashboard:summary");
   const accounts = useApi(() => api.listAccounts(), [], "accounts:list");
@@ -157,6 +159,17 @@ export function Dashboard() {
       return 0;
     });
   }, [accounts.data, sort]);
+  const assetRows = topAssets.data ?? [];
+  const assetPageCount = Math.max(1, Math.ceil(assetRows.length / ASSET_PAGE_SIZE));
+  const clampedAssetPage = Math.min(assetPage, assetPageCount - 1);
+  const pagedAssets = assetRows.slice(
+    clampedAssetPage * ASSET_PAGE_SIZE,
+    (clampedAssetPage + 1) * ASSET_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setAssetPage(0);
+  }, [minUsd]);
 
   const refreshAll = () => {
     summary.refetch();
@@ -331,7 +344,40 @@ export function Dashboard() {
           </div>
           <div className="sketch-box p-12">
             <div className="row between mb-8">
-              <span className="mono-xs">{t.dashboard.assetBreakdown}</span>
+              <div className="row" style={{ gap: 8 }}>
+                <span className="mono-xs">{t.dashboard.assetBreakdown}</span>
+                {assetRows.length > ASSET_PAGE_SIZE && (
+                  <div className="row" style={{ gap: 4 }}>
+                    <button
+                      type="button"
+                      className="wbtn"
+                      disabled={clampedAssetPage === 0}
+                      onClick={() => setAssetPage(Math.max(0, clampedAssetPage - 1))}
+                      aria-label={t.dashboard.prevAssetPage}
+                      title={t.dashboard.prevAssetPage}
+                      style={{ width: 24, height: 22, padding: 0, lineHeight: 1 }}
+                    >
+                      ‹
+                    </button>
+                    <span className="tiny">
+                      {clampedAssetPage + 1} / {assetPageCount}
+                    </span>
+                    <button
+                      type="button"
+                      className="wbtn"
+                      disabled={clampedAssetPage >= assetPageCount - 1}
+                      onClick={() =>
+                        setAssetPage(Math.min(assetPageCount - 1, clampedAssetPage + 1))
+                      }
+                      aria-label={t.dashboard.nextAssetPage}
+                      title={t.dashboard.nextAssetPage}
+                      style={{ width: 24, height: 22, padding: 0, lineHeight: 1 }}
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
+              </div>
               <label
                 className="tiny"
                 style={{
@@ -383,7 +429,7 @@ export function Dashboard() {
                 />
               </label>
             </div>
-            {(topAssets.data?.length ?? 0) === 0 ? (
+            {assetRows.length === 0 ? (
               <div className="tiny muted">
                 {hideLowBalance
                   ? t.dashboard.noAssetsHidden
@@ -391,7 +437,8 @@ export function Dashboard() {
               </div>
             ) : (
               <BarList
-                items={topAssets.data!.map((a) => ({ k: a.sym, v: a.bal }))}
+                items={pagedAssets.map((a) => ({ k: a.sym, v: a.bal }))}
+                max={assetRows[0]?.bal}
               />
             )}
           </div>

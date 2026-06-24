@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ApiError, api } from "../api";
+import { sensitiveDigits } from "../lib/format";
 import { useTranslation } from "../i18n/useTranslation";
 import type {
   AccountDetail,
@@ -196,7 +197,9 @@ export function AddCustomAssetsModal({
           <span className="mono-xs">{t.editAcct.assetsHeader}</span>
           <span className="tiny" style={{ color: "var(--muted)" }}>
             {t.editAcct.subtotal(
-              subtotal.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+              sensitiveDigits(
+                subtotal.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+              ),
             )}
           </span>
         </div>

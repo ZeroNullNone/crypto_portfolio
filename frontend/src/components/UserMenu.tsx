@@ -11,6 +11,26 @@ const LANGS = [
 
 type Panel = "main" | "lang";
 
+export function PrivacyToggle() {
+  const { prefs, setPref } = usePreferences();
+  const t = useTranslation();
+  const hidden = prefs.hideSensitiveNumbers;
+  const label = hidden ? t.userMenu.showNumbers : t.userMenu.hideNumbers;
+
+  return (
+    <button
+      type="button"
+      className={"nav-tab privacy-toggle" + (hidden ? " active" : "")}
+      onClick={() => setPref("hideSensitiveNumbers", !hidden)}
+      aria-label={label}
+      aria-pressed={hidden}
+      title={label}
+    >
+      <EyeIcon off={hidden} />
+    </button>
+  );
+}
+
 export function UserMenu() {
   const { user, logout } = useAuth();
   const { prefs, setPref } = usePreferences();
@@ -115,6 +135,38 @@ export function UserMenu() {
         </div>
       )}
     </div>
+  );
+}
+
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r="3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      {off && (
+        <path
+          d="M4 4l16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      )}
+    </svg>
   );
 }
 

@@ -2,22 +2,29 @@ import { useCallback, useEffect, useState } from "react";
 
 export interface Preferences {
   hideLowBalance: boolean;
+  hideSensitiveNumbers: boolean;
   lowBalanceThreshold: number;
   lang: string;
 }
 
 const DEFAULTS: Preferences = {
   hideLowBalance: true,
+  hideSensitiveNumbers: false,
   lowBalanceThreshold: 1,
   lang: "EN",
 };
 
 const STORAGE_KEY = "portfolio:prefs:v1";
 const SUPPORTED_LANGS = ["EN", "ZH"] as const;
+let scope: string | null = null;
+
+function storageKey(): string {
+  return scope ? `${STORAGE_KEY}:${scope}` : STORAGE_KEY;
+}
 
 function read(): Preferences {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey());
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<Preferences>;
     const merged = { ...DEFAULTS, ...parsed };
@@ -47,11 +54,17 @@ const listeners = new Set<(p: Preferences) => void>();
 function write(next: Preferences): void {
   current = next;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(storageKey(), JSON.stringify(next));
   } catch {
     // ignore quota / private-mode failures
   }
   listeners.forEach((l) => l(next));
+}
+
+export function setPreferenceScope(userId: string | null): void {
+  scope = userId;
+  current = read();
+  listeners.forEach((l) => l(current));
 }
 
 /** Read the current language outside React (e.g. from the API client at
@@ -60,6 +73,10 @@ function write(next: Preferences): void {
  *  the website language without threading a prop through every caller. */
 export function getCurrentLang(): string {
   return current.lang;
+}
+
+export function isSensitiveNumbersHidden(): boolean {
+  return current.hideSensitiveNumbers;
 }
 
 export function usePreferences(): {

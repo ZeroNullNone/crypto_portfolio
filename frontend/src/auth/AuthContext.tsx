@@ -9,6 +9,7 @@ import {
 } from "react";
 import { ApiError, api } from "../api";
 import { clearApiCache, setCacheScope } from "../hooks/useApi";
+import { setPreferenceScope } from "../hooks/usePreferences";
 import type { User } from "../types";
 
 type Status = "loading" | "anon" | "authed";
@@ -37,17 +38,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const me = await api.me();
       setCacheScope(me.id);
+      setPreferenceScope(me.id);
       setUser(me);
       setStatus("authed");
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setCacheScope(null);
+        setPreferenceScope(null);
         setUser(null);
         setStatus("anon");
       } else {
         // Unknown error — staying in `loading` would hide the UI; treat as anon
         // so the login page renders and the user can retry.
         setCacheScope(null);
+        setPreferenceScope(null);
         setUser(null);
         setStatus("anon");
       }
@@ -61,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const u = await api.login(email, password);
     setCacheScope(u.id);
+    setPreferenceScope(u.id);
     setUser(u);
     setStatus("authed");
   }, []);
@@ -68,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signup = useCallback(async (email: string, password: string) => {
     const u = await api.signup(email, password);
     setCacheScope(u.id);
+    setPreferenceScope(u.id);
     setUser(u);
     setStatus("authed");
   }, []);
@@ -78,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       clearApiCache();
       setCacheScope(null);
+      setPreferenceScope(null);
       setUser(null);
       setStatus("anon");
     }
@@ -91,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await api.deleteMe();
     clearApiCache();
     setCacheScope(null);
+    setPreferenceScope(null);
     setUser(null);
     setStatus("anon");
   }, []);

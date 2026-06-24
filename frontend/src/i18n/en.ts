@@ -29,6 +29,8 @@ export const en = {
 
   // Top-level nav (UserMenu)
   userMenu: {
+    hideNumbers: "Hide sensitive numbers",
+    showNumbers: "Show sensitive numbers",
     language: "Language",
     settings: "Settings",
     logout: "Log out",
@@ -87,6 +89,8 @@ export const en = {
     colPct: "%",
     groups: "Groups",
     assetBreakdown: "Asset breakdown",
+    prevAssetPage: "Previous asset page",
+    nextAssetPage: "Next asset page",
     hideLowBalanceShort: (threshold: number) => `hide < $${threshold}`,
     hideLowBalanceTip: "Hide aggregated buckets whose total is under the threshold",
     thresholdLabel: "hide <",

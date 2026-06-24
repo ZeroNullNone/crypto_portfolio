@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { useApi } from "../hooks/useApi";
 import { useTranslation } from "../i18n/useTranslation";
 import { FirstRunOverlay } from "./FirstRunOverlay";
-import { UserMenu } from "./UserMenu";
+import { PrivacyToggle, UserMenu } from "./UserMenu";
 
 interface Tab {
   id: string;
@@ -60,7 +60,14 @@ export function Layout() {
               </NavLink>
             ))}
           </div>
-          <div className="nav-right">{user && <UserMenu />}</div>
+          <div className="nav-right">
+            {user && (
+              <>
+                <PrivacyToggle />
+                <UserMenu />
+              </>
+            )}
+          </div>
         </div>
       </nav>
 

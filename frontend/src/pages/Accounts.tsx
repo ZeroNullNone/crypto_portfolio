@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
 import { ChartPlaceholder, Delta, LineChart } from "../lib/charts";
-import { fmt$, fmt$k } from "../lib/format";
+import { fmt$, fmt$k, sensitiveText } from "../lib/format";
 import { useApi } from "../hooks/useApi";
 import { SYNC_ALL_CONFIRM, SyncButton } from "../components/SyncButton";
 import { EditAccountPanel } from "../components/EditAccountPanel";
@@ -814,7 +814,7 @@ export function Accounts() {
             {chainBadgeLabel(r.chain)}
           </span>
         </td>
-        <td className="num">{r.amt}</td>
+        <td className="num">{sensitiveText(r.amt)}</td>
         <td className="num">
           {r.price}
           {r.price_source === "api" && (
@@ -1715,7 +1715,7 @@ export function Accounts() {
                                   {chainBadgeLabel(r.chain)}
                                 </span>
                               </td>
-                              <td className="num">{r.amt}</td>
+                              <td className="num">{sensitiveText(r.amt)}</td>
                               <td className="num">
                                 {r.price}
                                 {r.price_source === "api" && (
@@ -1886,7 +1886,7 @@ export function Accounts() {
                                           {chainBadgeLabel(r.chain)}
                                         </span>
                                       </td>
-                                      <td className="num">{r.amt}</td>
+                                      <td className="num">{sensitiveText(r.amt)}</td>
                                       <td className="num">{r.price}</td>
                                       <td className="num">
                                         <b style={excludedUsdStyle(ex)}>

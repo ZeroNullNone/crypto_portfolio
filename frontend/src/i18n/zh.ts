@@ -28,6 +28,8 @@ export const zh: TranslationDict = {
   },
 
   userMenu: {
+    hideNumbers: "隐藏敏感数字",
+    showNumbers: "显示敏感数字",
     language: "语言",
     settings: "设置",
     logout: "退出登录",
@@ -84,6 +86,8 @@ export const zh: TranslationDict = {
     colPct: "%",
     groups: "分组",
     assetBreakdown: "资产分布",
+    prevAssetPage: "上一页资产",
+    nextAssetPage: "下一页资产",
     hideLowBalanceShort: (threshold: number) => `隐藏 < $${threshold}`,
     hideLowBalanceTip: "隐藏总额低于阈值的聚合条目",
     thresholdLabel: "隐藏 <",

@@ -1,7 +1,7 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { ApiError, api } from "../api";
 import { useAuth } from "../auth/AuthContext";
-import { fmt$ } from "../lib/format";
+import { fmt$, sensitiveDigits } from "../lib/format";
 import { useTranslation } from "../i18n/useTranslation";
 import type { TranslationDict } from "../i18n/en";
 import type {
@@ -945,7 +945,9 @@ function CustomFields({
         <span className="mono-xs">{t.editAcct.assetsHeader}</span>
         <span className="tiny" style={{ color: "var(--muted)" }}>
           {t.editAcct.subtotal(
-            subtotal.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+            sensitiveDigits(
+              subtotal.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+            ),
           )}
         </span>
       </div>

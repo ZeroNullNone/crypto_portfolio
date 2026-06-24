@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ChartPlaceholder, Delta, LineChart, Spark, StackedArea } from "../lib/charts";
-import { fmt$k } from "../lib/format";
+import { fmt$k, sensitiveDigits } from "../lib/format";
 import { useApi } from "../hooks/useApi";
 import { SYNC_ALL_CONFIRM, SyncButton } from "../components/SyncButton";
 import { useTranslation } from "../i18n/useTranslation";
@@ -263,10 +263,10 @@ function shiftMonthKey(key: string, delta: number): string {
 
 function fmtSignedUsd(v: number): string {
   const sign = v >= 0 ? "+" : "-";
-  return sign + Math.abs(v).toLocaleString("en-US", {
+  return sign + sensitiveDigits(Math.abs(v).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  });
+  }));
 }
 
 function dailyBalanceRows(series: BalancePoint[]) {

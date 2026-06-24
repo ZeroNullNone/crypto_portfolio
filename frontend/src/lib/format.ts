@@ -1,11 +1,24 @@
-export const fmt$ = (n: number): string =>
-  "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+import { isSensitiveNumbersHidden } from "../hooks/usePreferences";
+
+const maskDigits = (s: string): string => s.replace(/\d/g, "*");
+
+export const sensitiveDigits = (value: string): string =>
+  isSensitiveNumbersHidden() ? maskDigits(value) : value;
+
+export const fmt$ = (n: number): string => {
+  const formatted = "$" + n.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  return sensitiveDigits(formatted);
+};
 
 export const fmt$k = (n: number): string => {
+  if (isSensitiveNumbersHidden()) return (n < 0 ? "-" : "") + "$***";
   if (Math.abs(n) >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
   if (Math.abs(n) >= 1e3) return "$" + (n / 1e3).toFixed(1) + "k";
   return "$" + n.toFixed(0);
 };
+
+export const sensitiveText = (value: string, mask = "***"): string =>
+  isSensitiveNumbersHidden() && /\d/.test(value) ? mask : value;
 
 export const fmtPct = (n: number): string =>
   (n >= 0 ? "+" : "") + n.toFixed(2) + "%";

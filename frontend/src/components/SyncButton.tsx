@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import { useTranslation } from "../i18n/useTranslation";
+import { fmt$ } from "../lib/format";
 import type { TranslationDict } from "../i18n/en";
 import type { SyncEstimate, SyncResult, SyncSummary } from "../types";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -52,7 +53,7 @@ function summarize(r: Result, t: TranslationDict): string {
   }
   if (r.status === "ok") {
     return r.balance != null
-      ? t.syncBtn.syncedDollar(r.balance.toLocaleString())
+      ? t.syncBtn.syncedDollar(fmt$(r.balance).replace(/^\$/, ""))
       : t.syncBtn.statusSynced;
   }
   if (r.status === "skipped") return t.syncBtn.skipped(r.message ?? "");

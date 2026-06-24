@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
 import { ChartPlaceholder, Delta, LineChart } from "../lib/charts";
-import { fmt$ } from "../lib/format";
+import { fmt$, sensitiveText } from "../lib/format";
 import { useApi } from "../hooks/useApi";
 import { useTranslation } from "../i18n/useTranslation";
 import type { AccountHistoryPointInput, AccountSnapshot, Holding } from "../types";
@@ -450,7 +450,7 @@ export function AccountDetailModal({
             {chainBadgeLabel(r.chain)}
           </span>
         </td>
-        <td className="num">{r.amt}</td>
+        <td className="num">{sensitiveText(r.amt)}</td>
         <td className="num">
           {r.price}
           {r.price_source === "api" && (
@@ -985,7 +985,7 @@ export function AccountDetailModal({
                                 {chainBadgeLabel(r.chain)}
                               </span>
                             </td>
-                            <td className="num">{r.amt}</td>
+                            <td className="num">{sensitiveText(r.amt)}</td>
                             <td className="num">
                               {r.price}
                               {r.price_source === "api" && (
@@ -1127,7 +1127,7 @@ export function AccountDetailModal({
                                         {chainBadgeLabel(r.chain)}
                                       </span>
                                     </td>
-                                    <td className="num">{r.amt}</td>
+                                    <td className="num">{sensitiveText(r.amt)}</td>
                                     <td className="num">{r.price}</td>
                                     <td className="num">
                                       <b style={excludedUsdStyle(ex)}>
