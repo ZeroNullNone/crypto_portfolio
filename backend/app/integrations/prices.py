@@ -18,10 +18,12 @@ import urllib.request
 from typing import Any
 
 CMC_QUOTES_URL = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest"
+CMC_PLATFORM_URL = "https://pro-api.coinmarketcap.com/v1/dex/platform/list"
 PRICE_CACHE_TTL_SECONDS = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "300"))
 
 _cache_lock = threading.Lock()
 _price_cache: dict[str, tuple[float, float]] = {}
+_platform_icon_cache: tuple[float, dict[str, str]] | None = None
 
 
 class PriceNotFound(Exception):
@@ -107,3 +109,59 @@ def fetch_spot_price_usd(symbol: str, *, timeout: float = 8.0) -> float:
         with _cache_lock:
             _price_cache[sym] = (time.monotonic(), price_f)
     return price_f
+
+
+def _platform_key(value: Any) -> str:
+    return "".join(c for c in str(value or "").lower() if c.isalnum())
+
+
+def fetch_platform_icons(*, timeout: float = 8.0) -> dict[str, str]:
+    """Return CMC DEX platform icon URLs keyed by normalized name/acronym."""
+    global _platform_icon_cache
+    if PRICE_CACHE_TTL_SECONDS > 0:
+        now = time.monotonic()
+        with _cache_lock:
+            if _platform_icon_cache is not None:
+                cached_at, cached = _platform_icon_cache
+                if now - cached_at < PRICE_CACHE_TTL_SECONDS:
+                    return cached
+
+    api_key = (os.getenv("COINMARKETCAP_API_KEY") or "").strip()
+    if not api_key:
+        raise PriceNotFound("server missing COINMARKETCAP_API_KEY")
+
+    request = urllib.request.Request(
+        CMC_PLATFORM_URL,
+        headers={
+            "accept": "application/json",
+            "X-CMC_PRO_API_KEY": api_key,
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise PriceNotFound(f"platform icon lookup failed ({exc.code})") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise PriceNotFound(f"platform icon lookup failed: {exc}") from exc
+
+    rows = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise PriceNotFound("bad platform icon payload")
+
+    out: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        icon = str(row.get("i") or "").strip()
+        if not icon:
+            continue
+        for key in (row.get("n"), row.get("pltA"), row.get("id"), row.get("chId")):
+            norm = _platform_key(key)
+            if norm:
+                out[norm] = icon
+    if PRICE_CACHE_TTL_SECONDS > 0:
+        with _cache_lock:
+            _platform_icon_cache = (time.monotonic(), out)
+    return out

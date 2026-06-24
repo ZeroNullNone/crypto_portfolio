@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -140,6 +141,64 @@ def _fetch_binance_prices(symbols: list[str]) -> dict[str, float]:
     return prices
 
 
+def _binance_wallet_symbol(wallet_name: str) -> str:
+    normalized = unicodedata.normalize("NFKD", wallet_name)
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    key = "".join(ch if ch.isalnum() else "_" for ch in ascii_name.upper()).strip("_")
+    key = "_".join(part for part in key.split("_") if part)
+    return {
+        "CROSS_MARGIN": "MARGIN_CROSS",
+        "ISOLATED_MARGIN": "MARGIN_ISOLATED",
+        "USD_S_M_FUTURES": "USDM_FUTURES",
+        "COIN_M_FUTURES": "COINM_FUTURES",
+        "TRADING_BOTS": "TRADING_BOTS",
+        "COPY_TRADING": "COPY_TRADING",
+    }.get(key, key or "BINANCE_WALLET")
+
+
+def _fetch_binance_wallet_summary_assets(
+    creds: dict[str, str],
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    params = _binance_signed_params(
+        creds["api_secret"],
+        {
+            "quoteAsset": "USDT",
+            "recvWindow": "5000",
+            "timestamp": str(_now_ms()),
+        },
+    )
+    payload = _request_json_allow_statuses(
+        "https://api.binance.com/sapi/v1/asset/wallet/balance",
+        headers=_binance_headers(creds["api_key"]),
+        params=params,
+        allowed_statuses={401, 403},
+    )
+    if not isinstance(payload, list):
+        return 0.0, [], None
+
+    total_usd = 0.0
+    assets: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        wallet_name = str(item.get("walletName", "") or "").strip()
+        balance = _to_float(item.get("balance"))
+        if not wallet_name or balance <= 0:
+            continue
+        total_usd += balance
+        symbol = _binance_wallet_symbol(wallet_name)
+        _append_asset_row(
+            assets,
+            name=symbol,
+            amount=balance,
+            available=balance,
+            locked=0.0,
+            unit_price=1.0,
+            usd_value=balance,
+        )
+    return total_usd, assets, "binance /sapi/v1/asset/wallet/balance"
+
+
 def _fetch_gate_spot_prices(assets: list[str]) -> dict[str, float]:
     wanted = {asset.strip().upper() for asset in assets if asset}
     wanted = {asset for asset in wanted if asset and not _is_stable_asset(asset)}
@@ -238,7 +297,7 @@ def _fetch_binance_spot_assets(creds: dict[str, str]) -> tuple[float, list[dict[
         "https://api.binance.com/api/v3/account",
         headers=_binance_headers(creds["api_key"]),
         params=params,
-        allowed_statuses={401},
+        allowed_statuses={401, 403},
     )
     if not isinstance(payload, dict):
         return 0.0, [], None
@@ -376,7 +435,7 @@ def _fetch_binance_futures_assets(
         "https://fapi.binance.com/fapi/v2/account",
         headers=_binance_headers(creds["api_key"]),
         params=params,
-        allowed_statuses={401},
+        allowed_statuses={401, 403},
     )
     if not isinstance(payload, dict):
         return 0.0, [], None
@@ -411,11 +470,88 @@ def _fetch_binance_futures_assets(
     return total_margin_balance, assets, "binance /fapi/v2/account"
 
 
+def _fetch_binance_coin_futures_assets(
+    creds: dict[str, str],
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    params = _binance_signed_params(
+        creds["api_secret"],
+        {
+            "recvWindow": "5000",
+            "timestamp": str(_now_ms()),
+        },
+    )
+    payload = _request_json_allow_statuses(
+        "https://dapi.binance.com/dapi/v1/balance",
+        headers=_binance_headers(creds["api_key"]),
+        params=params,
+        allowed_statuses={401, 403},
+    )
+    if not isinstance(payload, list):
+        return 0.0, [], None
+
+    raw: list[dict[str, Any]] = []
+    symbols: list[str] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        asset = str(item.get("asset", "") or "").strip().upper()
+        if not asset:
+            continue
+        wallet_balance = _to_float(item.get("balance"))
+        available = _to_float(item.get("availableBalance"))
+        if wallet_balance <= 0:
+            continue
+        raw.append({"asset": asset, "amount": wallet_balance, "available": available})
+        if not _is_stable_asset(asset):
+            symbols.extend(_symbol_candidates(asset))
+
+    prices = _fetch_binance_prices(symbols)
+    total_usd = 0.0
+    assets: list[dict[str, Any]] = []
+    for item in raw:
+        asset = item["asset"]
+        amount = item["amount"]
+        unit_price = 1.0 if _is_stable_asset(asset) else 0.0
+        for symbol in _symbol_candidates(asset):
+            if symbol in prices:
+                unit_price = prices[symbol]
+                break
+        usd_value = amount * unit_price
+        total_usd += usd_value
+        _append_asset_row(
+            assets,
+            name=asset,
+            amount=amount,
+            available=min(item["available"], amount),
+            locked=max(amount - item["available"], 0.0),
+            unit_price=unit_price,
+            usd_value=usd_value,
+        )
+    return total_usd, assets, "binance /dapi/v1/balance"
+
+
+def _binance_covered_wallets(strategies: list[str]) -> set[str]:
+    covered: set[str] = set()
+    if any("/api/v3/account" in strategy for strategy in strategies):
+        covered.add("SPOT")
+    if any("/fapi/v2/account" in strategy for strategy in strategies):
+        covered.add("USDM_FUTURES")
+    if any("/dapi/v1/balance" in strategy for strategy in strategies):
+        covered.add("COINM_FUTURES")
+    if any("/papi/v1/balance" in strategy for strategy in strategies):
+        covered.update({"MARGIN_CROSS", "USDM_FUTURES", "COINM_FUTURES"})
+    return covered
+
+
 def fetch_binance_assets(wallet: dict[str, Any]) -> dict[str, Any]:
     creds = _load_cex_credentials(wallet)
     total_usd = 0.0
     assets: list[dict[str, Any]] = []
     strategies: list[str] = []
+    try:
+        wallet_total, wallet_assets, wallet_strategy = _fetch_binance_wallet_summary_assets(creds)
+    except urllib.error.HTTPError:
+        wallet_total, wallet_assets, wallet_strategy = 0.0, [], None
 
     # Classic mode always has a spot wallet; unified/PM mode keeps one too
     # (just usually empty once funds are transferred into the PM pool), so
@@ -440,6 +576,20 @@ def fetch_binance_assets(wallet: dict[str, Any]) -> dict[str, Any]:
             total_usd += futures_total
             assets.extend(futures_assets)
             strategies.append(futures_strategy)
+        coin_total, coin_assets, coin_strategy = _fetch_binance_coin_futures_assets(creds)
+        if coin_strategy:
+            total_usd += coin_total
+            assets.extend(coin_assets)
+            strategies.append(coin_strategy)
+
+    if wallet_strategy and (wallet_total > 0 or not assets):
+        covered_wallets = _binance_covered_wallets(strategies)
+        assets.extend(
+            row for row in wallet_assets
+            if str(row.get("symbol") or row.get("name") or "") not in covered_wallets
+        )
+        total_usd = wallet_total
+        strategies.append(wallet_strategy)
 
     return {
         "balance": total_usd,

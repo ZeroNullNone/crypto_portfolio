@@ -662,7 +662,7 @@ function OnchainFields({
               color: kind === "evm" ? "rgba(245,241,232,0.7)" : "var(--muted)",
             }}
           >
-            DeBank
+            {t.editAcct.providerDeBank}
           </span>
         </span>
         <span

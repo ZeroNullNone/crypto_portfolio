@@ -52,7 +52,7 @@ Local multi-user auth. Per-user, opaque session tokens (the cookie holds the raw
 
 The whole app keys off `account.source`:
 
-- `onchain` — EVM or Solana/Sui/Cosmos wallet. Dispatch in `services/sync.py::_sync_onchain`. EVM uses DeBank's `/total_balance` (wallet tokens across chains) **plus** `/complex_app_list` (DeFi positions) summed together — `total_balance` alone misses lending/LP/staking positions. Solana/Sui/Cosmos use CoinStats.
+- `onchain` — EVM or Solana/Sui/Cosmos wallet. Dispatch in `services/sync.py::_sync_onchain`. EVM uses `EVM_PORTFOLIO_PROVIDER` (`zerion` or `debank`) for wallet tokens plus DeFi positions. Solana/Sui/Cosmos use CoinStats.
 - `exchange` — centralized or perp DEX. Exchange is resolved by `_infer_exchange`: prefer the explicit `exchange` field on the `cex_credentials` row, fall back to address-prefix sniffing for legacy rows. Credentials live per-account in the DB, not in `.env`.
 - `custom` — manual entry; no sync, balance edited through the UI.
 
@@ -60,7 +60,7 @@ An old taxonomy (`chain` / `cex` / `perp` / `manual`) is rewritten in place by `
 
 ### Credentials split
 
-- **Global env** (`.env` at repo root): `SECRETS_KEY` (encrypts stored credentials), `DEBANK_ACCESS_KEY`, `COINSTATS_API_KEY`, `COINMARKETCAP_API_KEY`. Loaded by `main.py` via `load_dotenv(find_dotenv(usecwd=True))`; Docker Compose injects the same vars via `env_file`.
+- **Global env** (`.env` at repo root): `SECRETS_KEY` (encrypts stored credentials), `EVM_PORTFOLIO_PROVIDER`, `ZERION_API_KEY`, `DEBANK_ACCESS_KEY`, `COINSTATS_API_KEY`, `COINMARKETCAP_API_KEY`. Loaded by `main.py` via `load_dotenv(find_dotenv(usecwd=True))`; Docker Compose injects the same vars via `env_file`.
 - **Per-account** (DB `cex_credentials` table): `api_key`, `api_secret`, `passphrase`, `wallet_address`, `private_key`. Entered through the UI; the secret columns are encrypted at rest (`crypto.py` / `EncryptedString`), and the `credentials` router only exposes `has_*` booleans.
 
 ### Snapshots & history
@@ -81,7 +81,7 @@ Each account has at most one `account_snapshots` row (primary key = `account_id`
 ## Gotchas
 
 - **No Alembic / migrations framework.** Schema changes go through `Base.metadata.create_all` at startup. For data migrations, follow the `_migrate_source_values` pattern: idempotent SQL run inside `init_db()`.
-- **DeBank balance = tokens + positions.** Never use `total_usd_value` from `/total_balance` alone — always add the summed `usd` from positions produced by `_build_evm_holdings`.
+- **EVM balance = tokens + positions.** DeBank needs `/total_balance` plus `_build_evm_holdings` positions; Zerion sums `_build_zerion_holdings` rows.
 - **Session cookie is Secure-by-default.** Set `SESSION_COOKIE_SECURE=false` for local HTTP dev (docker-compose already does); flip it back behind HTTPS.
 - **`SECRETS_KEY` is required.** It encrypts CEX keys / wallet private keys at rest. Losing it means losing every stored credential. The app fails fast on boot if it's missing or malformed.
 - **i18n must stay mirrored.** `frontend/src/i18n/zh.ts` is typed as `TranslationDict` (= `typeof en`), so `en.ts` and `zh.ts` must have exactly the same keys or the build fails.

@@ -5,6 +5,7 @@ email is involved — signup creates the account and logs the user straight in.
 A forgotten password is an operator concern (reset the row in the DB)."""
 from __future__ import annotations
 
+import os
 import uuid
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
@@ -21,13 +22,27 @@ from ..auth import (
     verify_password,
 )
 from ..db import get_db
-from ..models import LoginRequest, SignupRequest, UserOut
+from ..models import AuthConfig, LoginRequest, SignupRequest, UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 def _user_out(u: m.UserRow) -> UserOut:
     return UserOut(id=u.id, email=u.email, created_at=u.created_at)
+
+
+def _registration_enabled() -> bool:
+    return (os.getenv("REGISTRATION_ENABLED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+@router.get("/config", response_model=AuthConfig)
+def config() -> AuthConfig:
+    return AuthConfig(registration_enabled=_registration_enabled())
 
 
 @router.post("/signup", response_model=UserOut, status_code=201)
@@ -38,6 +53,8 @@ def signup(
 ) -> UserOut:
     """Create the user row and sign them in immediately (sets the session
     cookie). Unlike the hosted version there's no email-confirmation step."""
+    if not _registration_enabled():
+        raise HTTPException(status_code=403, detail="Registration is disabled.")
     email = body.email.strip().lower()
     existing = db.query(m.UserRow).filter(m.UserRow.email == email).first()
     if existing is not None:

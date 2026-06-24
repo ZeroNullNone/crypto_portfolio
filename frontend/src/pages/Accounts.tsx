@@ -13,12 +13,14 @@ import { useTranslation } from "../i18n/useTranslation";
 import type {
   Account,
   AccountDetail,
+  AccountSnapshot,
   BalancePoint,
   Group,
   Holding,
 } from "../types";
 
 type FilterMode = "all" | "tok" | "pos";
+type HoldingsGroupBy = "assets" | "chain";
 
 type Selection =
   | { kind: "account"; id: string }
@@ -36,6 +38,62 @@ function fmtPriceStr(n: number): string {
   const abs = Math.abs(n);
   const maxFrac = abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
   return "$" + n.toLocaleString(undefined, { maximumFractionDigits: maxFrac });
+}
+
+function fmtSnapshotDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function fmtSnapshotDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function nearestPointIndex(series: BalancePoint[], iso: string): number | null {
+  const target = new Date(iso).getTime();
+  if (!Number.isFinite(target) || series.length === 0) return null;
+  let best = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < series.length; i++) {
+    const t = new Date(series[i].t).getTime();
+    if (!Number.isFinite(t)) continue;
+    const diff = Math.abs(t - target);
+    if (diff < bestDiff) {
+      best = i;
+      bestDiff = diff;
+    }
+  }
+  return bestDiff === Infinity ? null : best;
+}
+
+function nearestSnapshotIndex(snapshots: AccountSnapshot[], iso: string): number | null {
+  const target = new Date(iso).getTime();
+  if (!Number.isFinite(target) || snapshots.length === 0) return null;
+  let best = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < snapshots.length; i++) {
+    const t = new Date(snapshots[i].synced_at).getTime();
+    if (!Number.isFinite(t)) continue;
+    const diff = Math.abs(t - target);
+    if (diff < bestDiff) {
+      best = i;
+      bestDiff = diff;
+    }
+  }
+  return bestDiff === Infinity ? null : best;
 }
 
 // Merge each member account's holdings into one combined list. Holdings line
@@ -106,10 +164,10 @@ function aggregateGroupHistory(
   const tsList = Array.from(tsSet).sort((a, b) => a - b);
   if (tsList.length === 0) return [];
   const idxs: Record<string, number> = {};
-  const last: Record<string, number> = {};
+  const last: Record<string, number | null> = {};
   for (const id of accountIds) {
     idxs[id] = 0;
-    last[id] = 0;
+    last[id] = null;
   }
   const out: BalancePoint[] = [];
   for (const ts of tsList) {
@@ -120,7 +178,7 @@ function aggregateGroupHistory(
         last[id] = arr[idxs[id]].v;
         idxs[id]++;
       }
-      sum += last[id];
+      if (last[id] != null) sum += last[id];
     }
     out.push({ t: new Date(ts).toISOString(), v: sum });
   }
@@ -185,6 +243,15 @@ interface ProtocolGroup {
   positions: Holding[];
 }
 
+interface ChainGroup {
+  chain: string;
+  logo?: string | null;
+  color: string;
+  usd: number;
+  d: number;
+  holdings: Holding[];
+}
+
 function groupPositionsByProtocol(
   positions: Holding[],
   isExcluded: (p: Holding) => boolean,
@@ -219,6 +286,40 @@ function groupPositionsByProtocol(
   }));
   groups.sort((a, b) => b.usd - a.usd);
   for (const g of groups) g.positions.sort((a, b) => b.usd - a.usd);
+  return groups;
+}
+
+function groupHoldingsByChain(
+  holdings: Holding[],
+  isExcluded: (h: Holding) => boolean,
+): ChainGroup[] {
+  const byChain = new Map<string, ChainGroup>();
+  for (const h of holdings) {
+    const key = h.chain || "unknown";
+    let bucket = byChain.get(key);
+    if (!bucket) {
+      bucket = {
+        chain: key,
+        logo: h.chain_logo || null,
+        color: h.c,
+        usd: 0,
+        d: 0,
+        holdings: [],
+      };
+      byChain.set(key, bucket);
+    }
+    bucket.holdings.push(h);
+    if (!isExcluded(h)) {
+      bucket.usd += h.usd;
+      bucket.d += (h.d || 0) * h.usd;
+    }
+  }
+  const groups = Array.from(byChain.values()).map((g) => ({
+    ...g,
+    d: g.usd !== 0 ? g.d / g.usd : 0,
+  }));
+  groups.sort((a, b) => b.usd - a.usd);
+  for (const g of groups) g.holdings.sort((a, b) => b.usd - a.usd);
   return groups;
 }
 
@@ -342,9 +443,13 @@ export function Accounts() {
   );
   const [selection, setSelection] = useState<Selection | null>(null);
   const [filter, setFilter] = useState<FilterMode>("all");
+  const [holdingsGroupBy, setHoldingsGroupBy] = useState<HoldingsGroupBy>("assets");
   const [hideDust, setHideDust] = useState(true);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [expandedProtos, setExpandedProtos] = useState<Set<string>>(new Set());
+  const [collapsedChains, setCollapsedChains] = useState<Set<string>>(new Set());
+  const [timeMachineOpen, setTimeMachineOpen] = useState(false);
+  const [snapshotIndex, setSnapshotIndex] = useState<number | null>(null);
   const [addAssetsOpen, setAddAssetsOpen] = useState(false);
 
   // Account list filters (mirrors what was on the old Manage page).
@@ -406,6 +511,16 @@ export function Accounts() {
     [activeAccountId],
     activeAccountId ? `account:${activeAccountId}` : undefined,
   );
+  const snapshots = useApi<AccountSnapshot[]>(
+    () => (activeAccountId ? api.accountSnapshots(activeAccountId) : Promise.resolve([])),
+    [activeAccountId],
+    activeAccountId ? `account:${activeAccountId}:snapshots` : undefined,
+  );
+
+  useEffect(() => {
+    setTimeMachineOpen(false);
+    setSnapshotIndex(null);
+  }, [activeAccountId]);
 
   const filteredAccounts = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -467,6 +582,14 @@ export function Accounts() {
       return next;
     });
   };
+  const toggleChain = (name: string) => {
+    setCollapsedChains((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
 
   const activeGroupMembers = useMemo(() => {
     if (!activeGroupName) return null;
@@ -517,8 +640,23 @@ export function Accounts() {
     [activeGroup, groupDetails.data],
   );
 
+  const snapshotRows = snapshots.data ?? [];
+  const snapshotPosition = snapshotIndex ?? snapshotRows.length - 1;
+  const selectedSnapshot =
+    !activeGroup && timeMachineOpen && snapshotRows.length > 0
+      ? snapshotRows[snapshotPosition]
+      : null;
+  const accountSeries = detail.data
+    ? (history.data?.per_account[detail.data.id] ?? [])
+    : [];
+  const timeMachineMarkerIndex = selectedSnapshot
+    ? nearestPointIndex(accountSeries, selectedSnapshot.synced_at)
+    : null;
+
   const holdings: Holding[] = activeGroup
     ? groupHoldings
+    : selectedSnapshot
+      ? selectedSnapshot.holdings
     : detail.data?.holdings ?? [];
   const serverExcluded = detail.data?.excluded_keys ?? [];
   const excludedKeys =
@@ -530,6 +668,7 @@ export function Accounts() {
   // already filtered out during aggregation, so nothing reads as "excluded"
   // here.
   const isExcluded = (h: Holding): boolean => {
+    if (selectedSnapshot) return false;
     if (activeGroup) return false;
     return h.key ? excludedSet.has(h.key) : !!h.excluded;
   };
@@ -540,11 +679,17 @@ export function Accounts() {
     : holdings;
   const tokens = visibleHoldings.filter((h) => h.kind === "tok");
   const positions = visibleHoldings.filter((h) => h.kind === "pos");
+  const filteredVisibleHoldings =
+    filter === "tok" ? tokens : filter === "pos" ? positions : visibleHoldings;
   const tokCount = tokens.length;
   const posCount = positions.length;
   const protoGroups = useMemo(
     () => groupPositionsByProtocol(positions, isExcluded),
     [positions, excludedSet],
+  );
+  const chainGroups = useMemo(
+    () => groupHoldingsByChain(filteredVisibleHoldings, isExcluded),
+    [filteredVisibleHoldings, excludedSet, selectedSnapshot],
   );
 
   const toggleExcluded = async (h: Holding) => {
@@ -581,10 +726,110 @@ export function Accounts() {
   const excludedUsdStyle = (excluded: boolean) =>
     excluded ? ({ textDecoration: "line-through" } as const) : undefined;
 
+  const renderHoldingRow = (r: Holding, key: string, indent = 0) => {
+    const ex = isExcluded(r);
+    const canExclude = !activeGroup && !selectedSnapshot;
+    return (
+      <tr key={key} style={excludedRowStyle(ex)}>
+        <td style={indent ? { paddingLeft: indent } : undefined}>
+          <HoldingIcon holding={r} size={indent ? 20 : 24} />
+        </td>
+        <td style={indent ? { paddingLeft: indent + 8 } : undefined}>
+          <b>{r.kind === "tok" ? r.sym : r.name}</b>{" "}
+          {r.kind === "tok" && (
+            <span style={{ color: "var(--muted)" }}>{r.name}</span>
+          )}
+          {ex && (
+            <span
+              className="tiny"
+              style={{
+                marginLeft: 6,
+                padding: "0 5px",
+                border: "1px solid var(--line)",
+                borderRadius: 3,
+                color: "var(--ink-2)",
+                fontSize: 9,
+                letterSpacing: 0.4,
+                verticalAlign: "middle",
+              }}
+            >
+              {t.accounts.excludedTag}
+            </span>
+          )}
+        </td>
+        <td>{r.proto}</td>
+        <td>
+          <span
+            className="src chain"
+            style={{ borderColor: "var(--line)", color: "var(--ink-2)" }}
+          >
+            {r.chain}
+          </span>
+        </td>
+        <td className="num">{r.amt}</td>
+        <td className="num">
+          {r.price}
+          {r.price_source === "api" && (
+            <span
+              className="tiny"
+              title={t.accounts.livePriceTip}
+              style={{
+                marginLeft: 6,
+                padding: "0 5px",
+                border: "1px solid var(--line)",
+                borderRadius: 3,
+                color: "var(--ink-2)",
+                fontSize: 9,
+                letterSpacing: 0.4,
+                verticalAlign: "middle",
+              }}
+            >
+              {t.accounts.live}
+            </span>
+          )}
+        </td>
+        <td className="num">
+          <b style={excludedUsdStyle(ex)}>
+            {r.usd < 0 ? "−" : ""}
+            {fmt$(Math.abs(r.usd))}
+          </b>
+        </td>
+        <td className="num">
+          <Delta v={r.d} />
+        </td>
+        <td className="num">
+          {canExclude && (
+            <button
+              type="button"
+              onClick={() => toggleExcluded(r)}
+              disabled={busyExclusion || !r.key}
+              title={ex ? t.accounts.includeTip : t.accounts.excludeTip}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--line)",
+                borderRadius: 3,
+                cursor: busyExclusion ? "wait" : "pointer",
+                fontSize: 9,
+                padding: "1px 5px",
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+                opacity: busyExclusion ? 0.5 : 1,
+                color: "var(--ink-2)",
+              }}
+            >
+              {ex ? t.accounts.includeBtn : t.accounts.excludeBtn}
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  };
+
   const refreshAfterSync = () => {
     accounts.refetch();
     detail.refetch();
     history.refetch();
+    snapshots.refetch();
     groupDetails.refetch();
   };
 
@@ -592,6 +837,7 @@ export function Accounts() {
     accounts.refetch();
     groups.refetch();
     history.refetch();
+    snapshots.refetch();
     groupDetails.refetch();
   };
 
@@ -1070,11 +1316,25 @@ export function Accounts() {
                       </div>
                     </div>
                     <div style={{ height: 100, marginTop: 10 }}>
-                      {(history.data?.per_account[detail.data.id]?.length ?? 0) >= 1 ? (
+                      {accountSeries.length >= 1 ? (
                         <LineChart
                           seed={11}
                           fill="#2e8b6b"
-                          series={history.data!.per_account[detail.data.id]}
+                          series={accountSeries}
+                          markerIndex={timeMachineMarkerIndex}
+                          onPointClick={
+                            timeMachineOpen
+                              ? (idx) => {
+                                  const point = accountSeries[idx];
+                                  if (!point) return;
+                                  const snapIdx = nearestSnapshotIndex(
+                                    snapshotRows,
+                                    point.t,
+                                  );
+                                  if (snapIdx != null) setSnapshotIndex(snapIdx);
+                                }
+                              : undefined
+                          }
                         />
                       ) : (
                         <ChartPlaceholder />
@@ -1083,17 +1343,159 @@ export function Accounts() {
                   </>
                 ) : (
                   <div className="tiny muted">{t.accounts.selectAccount}</div>
-                )}
-              </div>
+	                )}
+	              </div>
+
+              {selectedSnapshot && (
+                <div
+                  className="sketch-box"
+                  style={{
+                    borderColor: "#b68613",
+                    background: "#fff8df",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    className="row between"
+                    style={{
+                      padding: "10px 16px",
+                      borderBottom: "1.5px solid #b68613",
+                      background: "#fff0bd",
+                      color: "#7b5510",
+                    }}
+                  >
+                    <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
+                      <span className="head" style={{ fontSize: 15 }}>
+                        ⌛ {t.accounts.timeMachineTitle}
+                      </span>
+                      <span className="mono-xs">
+                        · {detail.data?.name.toUpperCase()}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="wbtn"
+                      onClick={() => {
+                        setTimeMachineOpen(false);
+                        setSnapshotIndex(null);
+                      }}
+                      style={{
+                        borderColor: "#b68613",
+                        color: "#7b5510",
+                        background: "#fff8df",
+                      }}
+                    >
+                      × {t.accounts.exitTimeMachine}
+                    </button>
+                  </div>
+                  <div className="p-16">
+                    <div className="sketch-box p-16" style={{ background: "#fbfbfa" }}>
+                      <div className="row between mb-12">
+                        <div>
+                          <div className="mono-xs">{t.accounts.asOf}</div>
+                          <div className="head" style={{ fontSize: 24 }}>
+                            {fmtSnapshotDateTime(selectedSnapshot.synced_at)}
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div className="head" style={{ fontSize: 30 }}>
+                            {fmt$(selectedSnapshot.bal)}
+                          </div>
+                          <div className="tiny">
+                            {t.accounts.snapshotCount(
+                              snapshotPosition + 1,
+                              snapshotRows.length,
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                        <button
+                          type="button"
+                          className="wbtn"
+                          disabled={snapshotPosition <= 0}
+                          onClick={() =>
+                            setSnapshotIndex(Math.max(snapshotPosition - 1, 0))
+                          }
+                          aria-label="Previous snapshot"
+                          style={{ width: 38, height: 34, padding: 0 }}
+                        >
+                          ◀
+                        </button>
+                        <div className="col" style={{ flex: 1, gap: 6 }}>
+                          <input
+                            type="range"
+                            min={0}
+                            max={Math.max(snapshotRows.length - 1, 0)}
+                            value={snapshotPosition}
+                            onChange={(e) => setSnapshotIndex(Number(e.target.value))}
+                            style={{ width: "100%", accentColor: "#b68613" }}
+                          />
+                          <div className="row between tiny" style={{ width: "100%" }}>
+                            <span>
+                              {snapshotRows[0]
+                                ? fmtSnapshotDate(snapshotRows[0].synced_at)
+                                : ""}
+                            </span>
+                            <span>{t.accounts.sliderHint}</span>
+                            <span>{t.accounts.now}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="wbtn"
+                          disabled={snapshotPosition >= snapshotRows.length - 1}
+                          onClick={() =>
+                            setSnapshotIndex(
+                              Math.min(snapshotPosition + 1, snapshotRows.length - 1),
+                            )
+                          }
+                          aria-label="Next snapshot"
+                          style={{ width: 38, height: 34, padding: 0 }}
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {(activeGroup || detail.data) && (
               <div className="sketch-box p-16">
-                <div className="row between mb-8">
-                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                    <span className="mono-xs">{t.accounts.holdingsTitle}</span>
-                  </div>
-                  <div className="row" style={{ gap: 10, alignItems: "center" }}>
-                    <label
+	                <div className="row between mb-8">
+	                  <div className="row" style={{ gap: 8, alignItems: "center" }}>
+	                    <span className="mono-xs">{t.accounts.holdingsTitle}</span>
+	                    <span className="mono-xs">|</span>
+	                    <span className="mono-xs">{t.accounts.groupBy}</span>
+	                    <span
+	                      className={"pill" + (holdingsGroupBy === "chain" ? " active" : "")}
+	                      onClick={() => setHoldingsGroupBy("chain")}
+	                    >
+	                      {t.accounts.groupByChain}
+	                    </span>
+	                    <span
+	                      className={"pill" + (holdingsGroupBy === "assets" ? " active" : "")}
+	                      onClick={() => setHoldingsGroupBy("assets")}
+	                    >
+	                      {t.accounts.groupByAssets}
+	                    </span>
+	                  </div>
+	                  <div className="row" style={{ gap: 10, alignItems: "center" }}>
+	                    {!activeGroup && (
+	                      <button
+	                        type="button"
+	                        className="wbtn"
+	                        disabled={snapshotRows.length === 0}
+	                        onClick={() => {
+	                          setTimeMachineOpen(true);
+	                          setSnapshotIndex(snapshotRows.length - 1);
+	                        }}
+	                      >
+	                        {t.accounts.timeMachine}
+	                      </button>
+	                    )}
+	                    <label
                       className="tiny"
                       style={{
                         display: "inline-flex",
@@ -1130,9 +1532,9 @@ export function Accounts() {
                         {t.accounts.filterDefi} ({protoGroups.length})
                       </span>
                     </div>
-                  </div>
-                </div>
-                {activeGroup && groupDetails.loading && holdings.length === 0 ? (
+	                  </div>
+	                </div>
+		                {activeGroup && groupDetails.loading && holdings.length === 0 ? (
                   <div className="tiny muted" style={{ padding: "12px 0" }}>
                     {t.accounts.loadingGroupAssets}
                   </div>
@@ -1158,10 +1560,73 @@ export function Accounts() {
                         <th className="num">{t.accounts.col24h}</th>
                         <th style={{ width: 28 }}></th>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {showTokens &&
-                        tokens.map((r, i) => {
+	                    </thead>
+	                    <tbody>
+	                      {holdingsGroupBy === "chain" &&
+	                        chainGroups.map((g) => {
+	                          const collapsed = collapsedChains.has(g.chain);
+	                          const headerHolding: Holding = {
+	                            kind: "tok",
+	                            sym: g.chain.slice(0, 3),
+	                            name: g.chain,
+	                            proto: "—",
+	                            chain: g.chain,
+	                            amt: "",
+	                            price: "",
+	                            usd: g.usd,
+	                            d: g.d,
+	                            c: g.color,
+	                            logo: g.logo,
+	                          };
+	                          return (
+	                            <Fragment key={`chain-${g.chain}`}>
+	                              <tr
+	                                onClick={() => toggleChain(g.chain)}
+	                                style={{
+	                                  cursor: "pointer",
+	                                  background: "rgba(46,139,107,0.08)",
+	                                }}
+	                              >
+	                                <td>
+	                                  <HoldingIcon holding={headerHolding} />
+	                                </td>
+	                                <td>
+	                                  <span
+	                                    style={{
+	                                      display: "inline-block",
+	                                      width: 12,
+	                                      fontFamily: "var(--mono)",
+	                                    }}
+	                                  >
+	                                    {collapsed ? "▸" : "▾"}
+	                                  </span>
+	                                  <b>{g.chain}</b>{" "}
+	                                  <span className="chip" style={{ marginLeft: 6 }}>
+	                                    {g.holdings.length}
+	                                  </span>
+	                                </td>
+	                                <td>—</td>
+	                                <td>—</td>
+	                                <td className="num">—</td>
+	                                <td className="num">—</td>
+	                                <td className="num">
+	                                  <b>{fmt$(Math.abs(g.usd))}</b>
+	                                </td>
+	                                <td className="num">
+	                                  <Delta v={g.d} />
+	                                </td>
+	                                <td></td>
+	                              </tr>
+	                              {!collapsed &&
+	                                g.holdings.map((r, i) =>
+	                                  renderHoldingRow(r, `chain-${g.chain}-${i}`, 16),
+	                                )}
+	                            </Fragment>
+	                          );
+	                        })}
+	                      {holdingsGroupBy === "assets" &&
+	                        showTokens &&
+	                        tokens.map((r, i) => {
                           const ex = isExcluded(r);
                           return (
                             <tr key={`tok-${i}`} style={excludedRowStyle(ex)}>
@@ -1233,7 +1698,7 @@ export function Accounts() {
                                 <Delta v={r.d} />
                               </td>
                               <td className="num">
-                                {!activeGroup && (
+	                                {!activeGroup && !selectedSnapshot && (
                                   <button
                                     type="button"
                                     onClick={() => toggleExcluded(r)}
@@ -1263,8 +1728,9 @@ export function Accounts() {
                             </tr>
                           );
                         })}
-                      {showPositions &&
-                        protoGroups.map((g) => {
+	                      {holdingsGroupBy === "assets" &&
+	                        showPositions &&
+	                        protoGroups.map((g) => {
                           const expanded = expandedProtos.has(g.proto);
                           const headerHolding: Holding = {
                             kind: "pos",
@@ -1383,7 +1849,7 @@ export function Accounts() {
                                         <Delta v={r.d} />
                                       </td>
                                       <td className="num">
-                                        {!activeGroup && (
+	                                        {!activeGroup && !selectedSnapshot && (
                                           <button
                                             type="button"
                                             onClick={() => toggleExcluded(r)}
@@ -1475,6 +1941,7 @@ export function Accounts() {
             accounts.refetch();
             detail.refetch();
             history.refetch();
+            snapshots.refetch();
           }}
         />
       )}

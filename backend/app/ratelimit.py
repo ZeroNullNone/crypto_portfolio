@@ -2,7 +2,7 @@
 
 These are soft guards against accidental spam (a stuck retry loop in the UI,
 or mashing "Sync") — not security controls. They protect the operator's
-DeBank / CoinStats / CoinMarketCap quota. In-memory state is fine: with
+EVM provider / CoinStats / CoinMarketCap quota. In-memory state is fine: with
 multiple uvicorn workers each enforces its own interval, so the effective
 floor is roughly the configured interval divided by the worker count, which
 is good enough for an accidental-spam guard.
@@ -25,7 +25,7 @@ class RateLimited(Exception):
 
 
 # Minimum seconds between sync calls for a single user. Each call to
-# DeBank/CoinStats costs the operator real API quota, and the UI auto-refresh
+# EVM provider/CoinStats costs the operator real API quota, and the UI auto-refresh
 # can get stuck retrying — this caps the damage. Tunable via env.
 SYNC_MIN_INTERVAL_SECONDS = int(os.getenv("SYNC_MIN_INTERVAL_SECONDS", "20"))
 PRICE_MIN_INTERVAL_SECONDS = float(os.getenv("PRICE_MIN_INTERVAL_SECONDS", "1.0"))

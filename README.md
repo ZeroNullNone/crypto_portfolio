@@ -1,5 +1,7 @@
 # Crypto Portfolio Tracker
 
+Modify from project https://github.com/your-quantguy/crypto-portfolio-tracker-oss
+
 Self-hosted dashboard for tracking your whole crypto portfolio in one place:
 on-chain wallets, centralized exchange accounts, perp/DEX positions, and manual
 ("custom") entries. Group accounts, sync balances on demand or on a daily
@@ -10,9 +12,9 @@ hosted billing, no email provider required.
 
 ## Features
 
-- **On-chain wallets** — EVM via [DeBank](https://cloud.debank.com/) (wallet
-  tokens **plus** DeFi positions: lending, LPs, staking, perps); Solana / Sui /
-  Cosmos via [CoinStats](https://openapi.coinstats.app/).
+- **On-chain wallets** — EVM via Zerion or [DeBank](https://cloud.debank.com/)
+  (wallet tokens **plus** DeFi positions: lending, LPs, staking, perps);
+  Solana / Sui / Cosmos via [CoinStats](https://openapi.coinstats.app/).
 - **Exchanges & perp DEXs** — Binance · Bitget · OKX · Bybit · Gate ·
   Hyperliquid · Derive · Extended. Keys are entered in the UI and stored
   **encrypted at rest**.
@@ -34,6 +36,7 @@ hosted billing, no email provider required.
 
 ```bash
 cp .env.example .env        # then fill in SECRETS_KEY + provider keys
+# set REGISTRATION_ENABLED=true while creating your first user
 docker compose up --build -d
 ```
 
@@ -45,8 +48,13 @@ At minimum set `SECRETS_KEY` (used to encrypt stored credentials). Generate one:
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
 
-Add `DEBANK_ACCESS_KEY` / `COINSTATS_API_KEY` / `COINMARKETCAP_API_KEY` for the
-data sources you use. See [.env.example](.env.example) for everything else.
+Set `EVM_PORTFOLIO_PROVIDER=zerion` with `ZERION_API_KEY`, or
+`EVM_PORTFOLIO_PROVIDER=debank` with `DEBANK_ACCESS_KEY`. Add
+`COINSTATS_API_KEY` / `COINMARKETCAP_API_KEY` for the other data sources you
+use. See [.env.example](.env.example) for everything else.
+
+Registration is off by default. Set `REGISTRATION_ENABLED=true`, create the
+user, then set it back to `false` and restart.
 
 SQLite data is persisted to `./data` (mounted into the backend container).
 
@@ -73,8 +81,9 @@ Health check: `GET /api/health`. Set `ENABLE_API_DOCS=1` for `/docs`.
 
 ## How credentials work
 
-- **Global provider keys** (`.env`): `DEBANK_ACCESS_KEY`, `COINSTATS_API_KEY`,
-  `COINMARKETCAP_API_KEY`. Used by the server to read public on-chain data.
+- **Global provider keys** (`.env`): `ZERION_API_KEY`, `DEBANK_ACCESS_KEY`,
+  `COINSTATS_API_KEY`, `COINMARKETCAP_API_KEY`. Used by the server to read
+  public on-chain data.
 - **Per-account exchange keys** (entered in the UI): API key/secret/passphrase
   and wallet address/private key, stored encrypted in the DB with `SECRETS_KEY`.
   The API only ever returns `has_*` booleans, never the secret values.

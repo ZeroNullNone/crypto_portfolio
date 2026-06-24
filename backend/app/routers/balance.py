@@ -96,6 +96,7 @@ def history(
     per_account: dict[str, list[BalancePoint]] = {}
     by_wallet: dict[str, list[BalancePoint]] = {}
     by_group: dict[str, list[BalancePoint]] = {}
+    by_source: dict[str, list[BalancePoint]] = {}
     by_asset: dict[str, list[BalancePoint]] = {}
     if account_ids:
         history_rows = (
@@ -122,6 +123,7 @@ def history(
 
             iso = _as_utc_iso(total_row.t)
             group_values: dict[str, float] = {}
+            source_values: dict[str, float] = {}
             asset_values: dict[str, float] = {}
 
             for account_id, snap in latest.items():
@@ -130,6 +132,9 @@ def history(
                     continue
 
                 _append_point(by_wallet, account.name, iso, float(snap.bal or 0))
+
+                source = account.source.capitalize()
+                source_values[source] = source_values.get(source, 0.0) + float(snap.bal or 0)
 
                 group_name = _display_group(account.group_name)
                 group_values[group_name] = group_values.get(group_name, 0.0) + float(snap.bal or 0)
@@ -150,12 +155,14 @@ def history(
 
             for key, value in group_values.items():
                 _append_point(by_group, key, iso, value)
+            for key, value in source_values.items():
+                _append_point(by_source, key, iso, value)
             for key, value in asset_values.items():
                 _append_point(by_asset, key, iso, value)
 
     return BalanceHistory(
         total=total,
-        by_source={},
+        by_source=by_source,
         per_account=per_account,
         by_wallet=by_wallet,
         by_group=by_group,

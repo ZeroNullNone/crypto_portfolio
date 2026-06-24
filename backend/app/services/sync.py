@@ -1,12 +1,14 @@
 """Sync service — per-user, DB-backed.
 
-DeBank and CoinStats keys come from environment variables (configured by the
+DeBank/Zerion and CoinStats keys come from environment variables (configured by the
 operator via `.env`). Per-account CEX credentials come from the user's
 `cex_credentials` rows. Balances + snapshots are persisted into the DB.
 """
 from __future__ import annotations
 
+import html
 import os
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +27,29 @@ _HOLDING_PALETTE = [
 ]
 _MIN_HOLDING_USD = 0.01  # trim truly-worthless entries; the UI has its own
                          # "hide < $1" toggle for the visual list.
+_CHAIN_ICON_ALIASES = {
+    "eth": ("eth", "ethereum"),
+    "ethereum": ("eth", "ethereum"),
+    "bsc": ("bsc", "bnb", "bnbsmartchain", "binancesmartchain"),
+    "base": ("base",),
+    "op": ("op", "optimism"),
+    "optimism": ("op", "optimism"),
+    "arb": ("arb", "arbitrum", "arbitrumone"),
+    "arbitrum": ("arb", "arbitrum", "arbitrumone"),
+    "polygon": ("polygon", "matic", "pol"),
+    "matic": ("polygon", "matic", "pol"),
+    "avax": ("avax", "avalanche", "avalanchecchain"),
+    "avalanche": ("avax", "avalanche", "avalanchecchain"),
+    "fantom": ("ftm", "fantom"),
+    "ftm": ("ftm", "fantom"),
+    "linea": ("linea",),
+    "scroll": ("scroll",),
+    "zksync": ("zksync", "zksyncera"),
+    "opbnb": ("opbnb",),
+    "xlayer": ("xlayer",),
+    "morph": ("morph",),
+    "soneium": ("soneium",),
+}
 
 
 def holding_key(h: dict[str, Any]) -> str:
@@ -71,6 +96,54 @@ def _color_for(key: str) -> str:
         return _HOLDING_PALETTE[0]
     n = sum(ord(c) for c in key)
     return _HOLDING_PALETTE[n % len(_HOLDING_PALETTE)]
+
+
+def _chain_icon_key(value: Any) -> str:
+    return "".join(c for c in str(value or "").lower() if c.isalnum())
+
+
+def _dummy_chain_icon(chain: str) -> str:
+    label = html.escape((chain or "?")[:3].upper())
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+        "<circle cx='32' cy='32' r='30' fill='#000'/>"
+        "<circle cx='32' cy='32' r='30' fill='none' stroke='#1a1814' stroke-width='3'/>"
+        f"<text x='32' y='37' text-anchor='middle' font-family='monospace' "
+        f"font-size='15' font-weight='700' fill='#fff'>{label}</text>"
+        "</svg>"
+    )
+    return "data:image/svg+xml;utf8," + urllib.parse.quote(svg, safe="")
+
+
+def _cmc_chain_icon(chain: str, icons: dict[str, str]) -> str | None:
+    aliases = _CHAIN_ICON_ALIASES.get(chain.lower(), (chain,))
+    for alias in aliases:
+        icon = icons.get(_chain_icon_key(alias))
+        if icon:
+            return icon
+    return None
+
+
+def _ensure_chain_logos(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    missing = {
+        str(h.get("chain") or "").lower()
+        for h in holdings
+        if isinstance(h, dict) and not h.get("chain_logo")
+    }
+    cmc_icons: dict[str, str] = {}
+    if missing and os.getenv("COINMARKETCAP_API_KEY"):
+        try:
+            from ..integrations.prices import fetch_platform_icons
+
+            cmc_icons = fetch_platform_icons()
+        except Exception:  # noqa: BLE001 - icon fallback must not break sync
+            cmc_icons = {}
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        chain = str(h.get("chain") or "").lower() or "unknown"
+        h["chain_logo"] = h.get("chain_logo") or _cmc_chain_icon(chain, cmc_icons) or _dummy_chain_icon(chain)
+    return holdings
 
 
 def _fmt_amount(x: float) -> str:
@@ -317,6 +390,164 @@ def _build_evm_holdings(tokens: list[dict[str, Any]], apps: list[dict[str, Any]]
                 out.append(h)
     # Sort by USD desc so the UI shows biggest first.
     out.sort(key=lambda h: h.get("usd", 0.0), reverse=True)
+    return out
+
+
+def _zerion_attrs(row: dict[str, Any]) -> dict[str, Any]:
+    attrs = row.get("attributes") or {}
+    return attrs if isinstance(attrs, dict) else {}
+
+
+def _zerion_chain(row: dict[str, Any]) -> str:
+    rel = row.get("relationships") or {}
+    chain = ((rel.get("chain") or {}).get("data") or {}).get("id")
+    return str(chain or "").lower() or "evm"
+
+
+def _zerion_icon(obj: dict[str, Any] | None) -> str | None:
+    icon = (obj or {}).get("icon") or {}
+    return str(icon.get("url") or "") or None
+
+
+def _zerion_chain_meta(chains: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in chains or []:
+        chain_id = str(row.get("id") or "").lower()
+        attrs = row.get("attributes") or {}
+        if chain_id and isinstance(attrs, dict):
+            out[chain_id] = attrs
+    return out
+
+
+def _zerion_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v if v not in (None, "") else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _zerion_is_position(row: dict[str, Any]) -> bool:
+    attrs = _zerion_attrs(row)
+    rel = row.get("relationships") or {}
+    app = attrs.get("application_metadata") or {}
+    dapp = ((rel.get("dapp") or {}).get("data") or {}).get("id")
+    return bool(app.get("name") or dapp or attrs.get("protocol") or attrs.get("protocol_module"))
+
+
+def _zerion_proto(row: dict[str, Any]) -> str:
+    attrs = _zerion_attrs(row)
+    rel = row.get("relationships") or {}
+    app = attrs.get("application_metadata") or {}
+    dapp = ((rel.get("dapp") or {}).get("data") or {}).get("id")
+    return str(app.get("name") or attrs.get("protocol") or dapp or "—")
+
+
+def _zerion_holding(
+    row: dict[str, Any],
+    chain_meta: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    attrs = _zerion_attrs(row)
+    flags = attrs.get("flags") or {}
+    if flags.get("displayable") is False or flags.get("is_trash"):
+        return None
+    usd = _zerion_float(attrs.get("value"))
+    if abs(usd) < _MIN_HOLDING_USD:
+        return None
+
+    info = attrs.get("fungible_info") or {}
+    qty = attrs.get("quantity") or {}
+    sym = str(info.get("symbol") or "?").upper()
+    price = _zerion_float(attrs.get("price") or (info.get("market_data") or {}).get("price"))
+    change = _zerion_float((attrs.get("changes") or {}).get("percent_1d"))
+    is_pos = _zerion_is_position(row)
+    proto = _zerion_proto(row) if is_pos else "—"
+    module = str(attrs.get("protocol_module") or attrs.get("name") or "").strip()
+    name = str(info.get("name") or sym)
+    if is_pos and module and module.lower() != "asset":
+        name = f"{module}: {sym}"
+    app = attrs.get("application_metadata") or {}
+    app_logo = _zerion_icon(app)
+    chain_id = _zerion_chain(row)
+    chain_logo = _zerion_icon((chain_meta or {}).get(chain_id))
+
+    return {
+        "kind": "pos" if is_pos else "tok",
+        "sym": sym,
+        "name": name,
+        "proto": proto,
+        "chain": chain_id,
+        "amt": _fmt_amount(_zerion_float(qty.get("float") or qty.get("numeric"))),
+        "price": _fmt_price(price),
+        "usd": round(usd, 2),
+        "d": change,
+        "c": _color_for(proto if is_pos else sym),
+        "logo": _zerion_icon(info) or app_logo,
+        "proto_logo": app_logo if is_pos else None,
+        "chain_logo": chain_logo,
+    }
+
+
+def _zerion_group_holding(
+    rows: list[dict[str, Any]],
+    chain_meta: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    parts = [_zerion_holding(row, chain_meta) for row in rows]
+    holdings = [h for h in parts if h is not None]
+    if not holdings:
+        return None
+    usd = sum(float(h.get("usd", 0.0) or 0.0) for h in holdings)
+    if abs(usd) < _MIN_HOLDING_USD:
+        return None
+    first = holdings[0]
+    syms = []
+    for h in holdings:
+        sym = str(h.get("sym") or "")
+        if sym and sym not in syms:
+            syms.append(sym)
+    proto = str(first.get("proto") or "—")
+    sym = "/".join(syms) or str(first.get("sym") or "LP")
+    return {
+        "kind": "pos",
+        "sym": sym,
+        "name": f"{proto}: {sym}",
+        "proto": proto,
+        "chain": str(first.get("chain") or "evm"),
+        "amt": f"{len(holdings)} assets",
+        "price": "—",
+        "usd": round(usd, 2),
+        "d": 0.0,
+        "c": _color_for(proto),
+        "logo": first.get("proto_logo") or first.get("logo"),
+        "proto_logo": first.get("proto_logo"),
+        "chain_logo": first.get("chain_logo"),
+    }
+
+
+def _build_zerion_holdings(
+    positions: list[dict[str, Any]],
+    chain_meta: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in positions or []:
+        attrs = _zerion_attrs(row)
+        group_id = str(attrs.get("group_id") or "")
+        if _zerion_is_position(row) and group_id:
+            groups.setdefault(group_id, []).append(row)
+        else:
+            h = _zerion_holding(row, chain_meta)
+            if h is not None:
+                out.append(h)
+
+    for rows in groups.values():
+        if len(rows) == 1:
+            h = _zerion_holding(rows[0], chain_meta)
+        else:
+            h = _zerion_group_holding(rows, chain_meta)
+        if h is not None:
+            out.append(h)
+
+    out.sort(key=lambda h: abs(float(h.get("usd", 0.0) or 0.0)), reverse=True)
     return out
 
 
@@ -817,50 +1048,72 @@ def _sync_onchain(db: Session, account: m.AccountRow) -> SyncResult:
             holdings = _build_coinstats_holdings(payload.get("assets") or [], chain)
             provider = "coinstats"
         else:
-            from ..integrations.debank import (
-                fetch_all_token_list,
-                fetch_complex_app_list,
-                fetch_total_balance,
-            )
+            evm_provider = (os.getenv("EVM_PORTFOLIO_PROVIDER") or "debank").strip().lower()
+            if evm_provider == "zerion":
+                from ..integrations.zerion import fetch_chains, fetch_wallet_positions
 
-            access_key = (os.getenv("DEBANK_ACCESS_KEY") or "").strip()
-            if not access_key:
-                return _result(account, "error", message="Server missing DEBANK_ACCESS_KEY")
-            payload = fetch_total_balance(account.addr, access_key)
-            # /total_balance covers wallet tokens across all chains BUT does NOT
-            # include DeFi app positions (lending, LPs, staking, etc.). Those
-            # come from /complex_app_list and have to be added on top.
-            tokens_only_bal = float(payload.get("total_usd_value", 0.0) or 0.0)
-            # Hyperliquid coverage on DeBank is unreliable; drop its contribution
-            # so the dedicated Hyperliquid info API is the sole source of truth.
-            for entry in payload.get("chain_list") or []:
-                if _is_hyperliquid_chain(entry.get("id") or entry.get("name")):
-                    tokens_only_bal -= float(entry.get("usd_value", 0.0) or 0.0)
-            tokens_only_bal = max(tokens_only_bal, 0.0)
-            tokens_raw: list[dict[str, Any]] = []
-            apps_raw: list[dict[str, Any]] = []
-            try:
-                tokens_raw = fetch_all_token_list(account.addr, access_key)
-            except Exception:  # noqa: BLE001 — partial-failure tolerant
-                tokens_raw = []
-            try:
-                apps_raw = fetch_complex_app_list(account.addr, access_key)
-            except Exception:  # noqa: BLE001
-                apps_raw = []
-            tokens_raw = [t for t in tokens_raw if not _is_hyperliquid_chain(t.get("chain"))]
-            apps_raw = [a for a in apps_raw if not _is_hyperliquid_chain(a.get("chain"))]
-            holdings = _build_evm_holdings(tokens_raw, apps_raw)
-            positions_bal = sum(
-                float(h.get("usd", 0.0) or 0.0)
-                for h in holdings
-                if h.get("kind") == "pos"
-            )
-            new_bal = tokens_only_bal + positions_bal
-            provider = "debank"
+                api_key = (os.getenv("ZERION_API_KEY") or "").strip()
+                if not api_key:
+                    return _result(account, "error", message="Server missing ZERION_API_KEY")
+                positions_raw = fetch_wallet_positions(account.addr, api_key)
+                try:
+                    chain_meta = _zerion_chain_meta(fetch_chains(api_key))
+                except Exception:  # noqa: BLE001 - icons are optional metadata
+                    chain_meta = {}
+                holdings = _build_zerion_holdings(positions_raw, chain_meta)
+                new_bal = sum(float(h.get("usd", 0.0) or 0.0) for h in holdings)
+                provider = "zerion"
+            elif evm_provider == "debank":
+                from ..integrations.debank import (
+                    fetch_all_token_list,
+                    fetch_complex_app_list,
+                    fetch_total_balance,
+                )
+
+                access_key = (os.getenv("DEBANK_ACCESS_KEY") or "").strip()
+                if not access_key:
+                    return _result(account, "error", message="Server missing DEBANK_ACCESS_KEY")
+                payload = fetch_total_balance(account.addr, access_key)
+                # /total_balance covers wallet tokens across all chains BUT does NOT
+                # include DeFi app positions (lending, LPs, staking, etc.). Those
+                # come from /complex_app_list and have to be added on top.
+                tokens_only_bal = float(payload.get("total_usd_value", 0.0) or 0.0)
+                # Hyperliquid coverage on DeBank is unreliable; drop its contribution
+                # so the dedicated Hyperliquid info API is the sole source of truth.
+                for entry in payload.get("chain_list") or []:
+                    if _is_hyperliquid_chain(entry.get("id") or entry.get("name")):
+                        tokens_only_bal -= float(entry.get("usd_value", 0.0) or 0.0)
+                tokens_only_bal = max(tokens_only_bal, 0.0)
+                tokens_raw: list[dict[str, Any]] = []
+                apps_raw: list[dict[str, Any]] = []
+                try:
+                    tokens_raw = fetch_all_token_list(account.addr, access_key)
+                except Exception:  # noqa: BLE001 — partial-failure tolerant
+                    tokens_raw = []
+                try:
+                    apps_raw = fetch_complex_app_list(account.addr, access_key)
+                except Exception:  # noqa: BLE001
+                    apps_raw = []
+                tokens_raw = [t for t in tokens_raw if not _is_hyperliquid_chain(t.get("chain"))]
+                apps_raw = [a for a in apps_raw if not _is_hyperliquid_chain(a.get("chain"))]
+                holdings = _build_evm_holdings(tokens_raw, apps_raw)
+                positions_bal = sum(
+                    float(h.get("usd", 0.0) or 0.0)
+                    for h in holdings
+                    if h.get("kind") == "pos"
+                )
+                new_bal = tokens_only_bal + positions_bal
+                provider = "debank"
+            else:
+                return _result(
+                    account,
+                    "error",
+                    message=f"Unsupported EVM_PORTFOLIO_PROVIDER '{evm_provider}'",
+                )
     except Exception as exc:  # noqa: BLE001
         return _result(account, "error", message=str(exc))
 
-    _persist_snapshot(db, account, new_bal, provider, holdings=holdings)
+    _persist_snapshot(db, account, new_bal, provider, holdings=_ensure_chain_logos(holdings))
     return _result(account, "ok", balance=account.bal, message=f"synced via {provider}")
 
 
@@ -1027,12 +1280,25 @@ def _validate_onchain(account: m.AccountRow) -> None:
             }[chain]
             fetcher(account.addr, api_key=api_key)
         else:
-            from ..integrations.debank import fetch_total_balance
+            evm_provider = (os.getenv("EVM_PORTFOLIO_PROVIDER") or "debank").strip().lower()
+            if evm_provider == "zerion":
+                from ..integrations.zerion import fetch_wallet_positions
 
-            access_key = (os.getenv("DEBANK_ACCESS_KEY") or "").strip()
-            if not access_key:
-                raise ValidationFailed("Server missing DEBANK_ACCESS_KEY")
-            fetch_total_balance(account.addr, access_key)
+                api_key = (os.getenv("ZERION_API_KEY") or "").strip()
+                if not api_key:
+                    raise ValidationFailed("Server missing ZERION_API_KEY")
+                fetch_wallet_positions(account.addr, api_key)
+            elif evm_provider == "debank":
+                from ..integrations.debank import fetch_total_balance
+
+                access_key = (os.getenv("DEBANK_ACCESS_KEY") or "").strip()
+                if not access_key:
+                    raise ValidationFailed("Server missing DEBANK_ACCESS_KEY")
+                fetch_total_balance(account.addr, access_key)
+            else:
+                raise ValidationFailed(
+                    f"Unsupported EVM_PORTFOLIO_PROVIDER '{evm_provider}'"
+                )
     except ValidationFailed:
         raise
     except Exception as exc:  # noqa: BLE001

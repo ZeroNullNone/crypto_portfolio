@@ -2,9 +2,13 @@ import type {
   Account,
   AccountDetail,
   AccountInput,
+  AccountSnapshot,
+  AuthConfig,
   AutoSyncSettings,
   AutoSyncSettingsInput,
   BalanceHistory,
+  CashflowEntry,
+  CashflowEntryInput,
   CashflowSummary,
   CexCredentialInput,
   CexCredentialStatus,
@@ -56,6 +60,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   // Auth — signup creates the account and signs you in immediately.
+  authConfig: () => http<AuthConfig>("/api/auth/config"),
   signup: (email: string, password: string) =>
     http<User>("/api/auth/signup", {
       method: "POST",
@@ -79,6 +84,8 @@ export const api = {
     return http<Account[]>(`/api/accounts${suffix}`);
   },
   getAccount: (id: string) => http<AccountDetail>(`/api/accounts/${id}`),
+  accountSnapshots: (id: string) =>
+    http<AccountSnapshot[]>(`/api/accounts/${id}/snapshots`),
   createAccount: (body: AccountInput) =>
     http<Account>("/api/accounts", { method: "POST", body: JSON.stringify(body) }),
   updateAccount: (id: string, body: Partial<AccountInput>) =>
@@ -114,10 +121,18 @@ export const api = {
   topAssets: (minUsd: number = 1) =>
     http<TopAsset[]>(`/api/dashboard/top-assets?min_usd=${minUsd}`),
   balanceHistory: (range: string = "30D") =>
-    http<BalanceHistory>(`/api/balance/history?range=${range}`),
-  cashflow: () => http<CashflowSummary>("/api/cashflow"),
+    http<BalanceHistory>(`/api/balance/history?range=${encodeURIComponent(range)}`),
+  cashflow: (range: string = "30D") =>
+    http<CashflowSummary>(`/api/cashflow?range=${encodeURIComponent(range)}`),
+  createCashflowEntry: (body: CashflowEntryInput) =>
+    http<CashflowEntry>("/api/cashflow", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteCashflowEntry: (id: number) =>
+    http<void>(`/api/cashflow/${id}`, { method: "DELETE" }),
 
-  // Credentials — CEX only (debank/coinstats are server-side env)
+  // Credentials — CEX only (provider keys are server-side env)
   credentialsStatus: () => http<CredentialsStatus>("/api/credentials"),
   setCexCredential: (accountId: string, body: CexCredentialInput) =>
     http<CexCredentialStatus>(`/api/credentials/cex/${accountId}`, {

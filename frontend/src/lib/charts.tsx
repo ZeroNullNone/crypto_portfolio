@@ -64,6 +64,10 @@ interface LineProps {
   xAxis?: boolean;
   /** Allow click-drag selection to compare the value change over a period. */
   rangeSelect?: boolean;
+  /** Persistent vertical marker, used by time-machine snapshot scrubbing. */
+  markerIndex?: number | null;
+  markerColor?: string;
+  onPointClick?: (index: number) => void;
 }
 
 function fmtTooltipDate(iso: string): string {
@@ -111,6 +115,9 @@ export function LineChart({
   series,
   xAxis = false,
   rangeSelect = false,
+  markerIndex = null,
+  markerColor = "#b68613",
+  onPointClick,
 }: LineProps) {
   const values: number[] | undefined = series
     ? series.map((p) => p.v)
@@ -189,9 +196,18 @@ export function LineChart({
     setDragEndIdx(idx);
     setHoverIdx(idx);
   };
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!onPointClick) return;
+    const idx = idxFromEvent(e);
+    if (idx != null) onPointClick(idx);
+  };
 
   const hoverPt = hoverIdx != null ? pts[hoverIdx] : null;
   const hoverSeries = hoverIdx != null && series ? series[hoverIdx] : null;
+  const markerPt =
+    markerIndex != null && markerIndex >= 0 && markerIndex < pts.length
+      ? pts[markerIndex]
+      : null;
   const hoverLeftPct = hoverPt ? (hoverPt[0] / w) * 100 : 0;
   const hoverTopPct = hoverPt ? (hoverPt[1] / h) * 100 : 0;
   // Flip the tooltip to the left half when the cursor is on the right half so
@@ -251,6 +267,7 @@ export function LineChart({
       onMouseMove={interactive ? handleMove : undefined}
       onMouseDown={selectable ? handleDown : undefined}
       onMouseUp={selectable ? commitSelection : undefined}
+      onClick={interactive && onPointClick ? handleClick : undefined}
       onMouseLeave={() => {
         if (dragStartIdx != null) commitSelection();
         setHoverIdx(null);
@@ -335,6 +352,17 @@ export function LineChart({
             opacity="0.5"
           />
         )}
+        {markerPt && (
+          <line
+            x1={markerPt[0]}
+            y1={0}
+            x2={markerPt[0]}
+            y2={h}
+            stroke={markerColor}
+            strokeWidth="1.2"
+            opacity="0.95"
+          />
+        )}
       </svg>
       {singlePoint && (
         <div
@@ -400,6 +428,24 @@ export function LineChart({
             borderRadius: "50%",
             background: "#fbfbfa",
             border: `1.5px solid ${color}`,
+            boxSizing: "content-box",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      {markerPt && (
+        <div
+          style={{
+            position: "absolute",
+            left: `${(markerPt[0] / w) * 100}%`,
+            top: `${(markerPt[1] / h) * 100}%`,
+            width: 12,
+            height: 12,
+            transform: "translate(-50%, -50%)",
+            borderRadius: "50%",
+            background: markerColor,
+            border: "2px solid #f6e5ac",
+            boxShadow: "0 0 0 1px rgba(26,24,20,0.35)",
             boxSizing: "content-box",
             pointerEvents: "none",
           }}

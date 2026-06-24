@@ -1,7 +1,7 @@
 """Dashboard endpoints — summary + top assets (per-user)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import desc
@@ -26,6 +26,41 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def _utc_now_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _baseline_snapshot(
+    db: Session, user_id: str, cutoff: datetime
+) -> m.TotalSnapshotRow | None:
+    before = (
+        db.query(m.TotalSnapshotRow)
+        .filter(m.TotalSnapshotRow.user_id == user_id, m.TotalSnapshotRow.t <= cutoff)
+        .order_by(desc(m.TotalSnapshotRow.t))
+        .first()
+    )
+    if before is not None:
+        return before
+    return (
+        db.query(m.TotalSnapshotRow)
+        .filter(m.TotalSnapshotRow.user_id == user_id, m.TotalSnapshotRow.t >= cutoff)
+        .order_by(m.TotalSnapshotRow.t.asc())
+        .first()
+    )
+
+
+def _pct_since(db: Session, user_id: str, current: float, cutoff: datetime) -> float:
+    base = _baseline_snapshot(db, user_id, cutoff)
+    if base is None or base.v <= 0:
+        return 0.0
+    return round(((current - base.v) / base.v) * 100, 2)
+
+
+def _usd_since(db: Session, user_id: str, current: float, cutoff: datetime) -> float:
+    base = _baseline_snapshot(db, user_id, cutoff)
+    return round(current - base.v, 2) if base is not None else 0.0
+
+
 @router.get("/summary", response_model=DashboardSummary)
 def summary(
     user: m.UserRow = Depends(current_user),
@@ -33,8 +68,6 @@ def summary(
 ) -> DashboardSummary:
     accounts = db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id).all()
     total = sum(a.bal for a in accounts)
-    weighted_d = sum(a.bal * a.d for a in accounts)
-    change_24h_pct = round(weighted_d / total, 2) if total > 0 else 0.0
     sources: dict[str, int] = {}
     for a in accounts:
         sources[a.source] = sources.get(a.source, 0) + 1
@@ -44,14 +77,16 @@ def summary(
         .order_by(desc(m.TotalSnapshotRow.t))
         .first()
     )
+    now = _utc_now_naive()
+    cutoff_24h = now - timedelta(days=1)
     return DashboardSummary(
         total=round(total, 2),
-        change_24h_usd=round(total * (change_24h_pct / 100), 2),
-        change_24h_pct=change_24h_pct,
-        change_7d_pct=0.0,
-        change_30d_pct=0.0,
-        change_ytd_pct=0.0,
-        change_1h_pct=0.0,
+        change_24h_usd=_usd_since(db, user.id, total, cutoff_24h),
+        change_24h_pct=_pct_since(db, user.id, total, cutoff_24h),
+        change_7d_pct=_pct_since(db, user.id, total, now - timedelta(days=7)),
+        change_30d_pct=_pct_since(db, user.id, total, now - timedelta(days=30)),
+        change_ytd_pct=_pct_since(db, user.id, total, datetime(now.year, 1, 1)),
+        change_1h_pct=_pct_since(db, user.id, total, now - timedelta(hours=1)),
         accounts_count=len(accounts),
         sources_breakdown=sources,
         last_sync_at=_as_utc(last.t) if last else None,

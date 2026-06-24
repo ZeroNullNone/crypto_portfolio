@@ -47,6 +47,7 @@ export interface Holding {
   apr?: string | null;
   logo?: string | null;
   proto_logo?: string | null;
+  chain_logo?: string | null;
   amt_raw?: number | null;
   price_raw?: number | null;
   price_source?: PriceSource | null;
@@ -59,6 +60,15 @@ export interface AccountDetail extends Account {
   synced_at?: string | null;
   provider?: string | null;
   excluded_keys?: string[];
+}
+
+export interface AccountSnapshot {
+  id: number;
+  bal: number;
+  d: number;
+  synced_at: string;
+  provider: string;
+  holdings: Holding[];
 }
 
 export interface Group {
@@ -109,6 +119,27 @@ export interface CashflowSummary {
   outflows_30d: number;
   net_30d: number;
   pending: number;
+  entries: CashflowEntry[];
+}
+
+export type CashflowKind = "deposit" | "withdraw";
+
+export interface CashflowEntry {
+  id: number;
+  kind: CashflowKind;
+  amount_usd: number;
+  t: string;
+  account_id?: string | null;
+  account_name?: string | null;
+  note?: string | null;
+}
+
+export interface CashflowEntryInput {
+  kind: CashflowKind;
+  amount_usd: number;
+  t: string;
+  account_id?: string | null;
+  note?: string | null;
 }
 
 export type SyncStatus = "ok" | "skipped" | "error";
@@ -177,4 +208,8 @@ export interface User {
   id: string;
   email: string;
   created_at: string;
+}
+
+export interface AuthConfig {
+  registration_enabled: boolean;
 }

@@ -3,6 +3,7 @@ __pycache__/
 
 .env
 .env.*
+!.env.example
 
 .venv/
 venv/
@@ -26,4 +27,3 @@ pnpm-debug.log*
 dist/
 build/
 .vite/
-

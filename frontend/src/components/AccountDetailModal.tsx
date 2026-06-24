@@ -8,6 +8,7 @@ import { useTranslation } from "../i18n/useTranslation";
 import type { Holding } from "../types";
 
 type FilterMode = "all" | "tok" | "pos";
+type HoldingsGroupBy = "assets" | "chain";
 
 const HIDE_THRESHOLD_USD = 1;
 
@@ -59,6 +60,15 @@ interface ProtocolGroup {
   positions: Holding[];
 }
 
+interface ChainGroup {
+  chain: string;
+  logo?: string | null;
+  color: string;
+  usd: number;
+  d: number;
+  holdings: Holding[];
+}
+
 function groupPositionsByProtocol(
   positions: Holding[],
   isExcluded: (p: Holding) => boolean,
@@ -94,6 +104,40 @@ function groupPositionsByProtocol(
   return groups;
 }
 
+function groupHoldingsByChain(
+  holdings: Holding[],
+  isExcluded: (h: Holding) => boolean,
+): ChainGroup[] {
+  const byChain = new Map<string, ChainGroup>();
+  for (const h of holdings) {
+    const key = h.chain || "unknown";
+    let bucket = byChain.get(key);
+    if (!bucket) {
+      bucket = {
+        chain: key,
+        logo: h.chain_logo || null,
+        color: h.c,
+        usd: 0,
+        d: 0,
+        holdings: [],
+      };
+      byChain.set(key, bucket);
+    }
+    bucket.holdings.push(h);
+    if (!isExcluded(h)) {
+      bucket.usd += h.usd;
+      bucket.d += (h.d || 0) * h.usd;
+    }
+  }
+  const groups = Array.from(byChain.values()).map((g) => ({
+    ...g,
+    d: g.usd !== 0 ? g.d / g.usd : 0,
+  }));
+  groups.sort((a, b) => b.usd - a.usd);
+  for (const g of groups) g.holdings.sort((a, b) => b.usd - a.usd);
+  return groups;
+}
+
 export function AccountDetailModal({
   accountId,
   onClose,
@@ -114,8 +158,10 @@ export function AccountDetailModal({
   );
 
   const [filter, setFilter] = useState<FilterMode>("all");
+  const [holdingsGroupBy, setHoldingsGroupBy] = useState<HoldingsGroupBy>("assets");
   const [hideDust, setHideDust] = useState(true);
   const [expandedProtos, setExpandedProtos] = useState<Set<string>>(new Set());
+  const [collapsedChains, setCollapsedChains] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -127,6 +173,14 @@ export function AccountDetailModal({
 
   const toggleProto = (name: string) => {
     setExpandedProtos((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+  const toggleChain = (name: string) => {
+    setCollapsedChains((prev) => {
       const next = new Set(prev);
       if (next.has(name)) next.delete(name);
       else next.add(name);
@@ -146,11 +200,17 @@ export function AccountDetailModal({
     : holdings;
   const tokens = visibleHoldings.filter((h) => h.kind === "tok");
   const positions = visibleHoldings.filter((h) => h.kind === "pos");
+  const filteredVisibleHoldings =
+    filter === "tok" ? tokens : filter === "pos" ? positions : visibleHoldings;
   const tokCount = tokens.length;
   const posCount = positions.length;
   const protoGroups = useMemo(
     () => groupPositionsByProtocol(positions, isExcluded),
     [positions, excludedSet],
+  );
+  const chainGroups = useMemo(
+    () => groupHoldingsByChain(filteredVisibleHoldings, isExcluded),
+    [filteredVisibleHoldings, excludedSet],
   );
 
   const showTokens = filter === "all" || filter === "tok";
@@ -165,6 +225,83 @@ export function AccountDetailModal({
       : undefined;
   const excludedUsdStyle = (excluded: boolean) =>
     excluded ? ({ textDecoration: "line-through" } as const) : undefined;
+
+  const renderHoldingRow = (r: Holding, key: string, indent = 0) => {
+    const ex = isExcluded(r);
+    return (
+      <tr key={key} style={excludedRowStyle(ex)}>
+        <td style={indent ? { paddingLeft: indent } : undefined}>
+          <HoldingIcon holding={r} size={indent ? 20 : 24} />
+        </td>
+        <td style={indent ? { paddingLeft: indent + 8 } : undefined}>
+          <b>{r.kind === "tok" ? r.sym : r.name}</b>{" "}
+          {r.kind === "tok" && (
+            <span style={{ color: "var(--muted)" }}>{r.name}</span>
+          )}
+          {ex && (
+            <span
+              className="tiny"
+              style={{
+                marginLeft: 6,
+                padding: "0 5px",
+                border: "1px solid var(--line)",
+                borderRadius: 3,
+                color: "var(--ink-2)",
+                fontSize: 9,
+                letterSpacing: 0.4,
+                verticalAlign: "middle",
+              }}
+            >
+              {t.accounts.excludedTag}
+            </span>
+          )}
+        </td>
+        <td>{r.proto}</td>
+        <td>
+          <span
+            className="src chain"
+            style={{
+              borderColor: "var(--line)",
+              color: "var(--ink-2)",
+            }}
+          >
+            {r.chain}
+          </span>
+        </td>
+        <td className="num">{r.amt}</td>
+        <td className="num">
+          {r.price}
+          {r.price_source === "api" && (
+            <span
+              className="tiny"
+              title={t.accounts.livePriceTip}
+              style={{
+                marginLeft: 6,
+                padding: "0 5px",
+                border: "1px solid var(--line)",
+                borderRadius: 3,
+                color: "var(--ink-2)",
+                fontSize: 9,
+                letterSpacing: 0.4,
+                verticalAlign: "middle",
+              }}
+            >
+              {t.accounts.live}
+            </span>
+          )}
+        </td>
+        <td className="num">
+          <b style={excludedUsdStyle(ex)}>
+            {r.usd < 0 ? "−" : ""}
+            {fmt$(Math.abs(r.usd))}
+          </b>
+        </td>
+        <td className="num">
+          <Delta v={r.d} />
+        </td>
+      </tr>
+    );
+  };
 
   const modal = (
     <div
@@ -298,10 +435,24 @@ export function AccountDetailModal({
 
           {detail.data && (
             <div className="sketch-box p-16">
-              <div className="row between mb-8">
-                <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                  <span className="mono-xs">{t.accounts.holdingsTitle}</span>
-                </div>
+	              <div className="row between mb-8">
+	                <div className="row" style={{ gap: 8, alignItems: "center" }}>
+	                  <span className="mono-xs">{t.accounts.holdingsTitle}</span>
+	                  <span className="mono-xs">|</span>
+	                  <span className="mono-xs">{t.accounts.groupBy}</span>
+	                  <span
+	                    className={"pill" + (holdingsGroupBy === "chain" ? " active" : "")}
+	                    onClick={() => setHoldingsGroupBy("chain")}
+	                  >
+	                    {t.accounts.groupByChain}
+	                  </span>
+	                  <span
+	                    className={"pill" + (holdingsGroupBy === "assets" ? " active" : "")}
+	                    onClick={() => setHoldingsGroupBy("assets")}
+	                  >
+	                    {t.accounts.groupByAssets}
+	                  </span>
+	                </div>
                 <div className="row" style={{ gap: 10, alignItems: "center" }}>
                   <label
                     className="tiny"
@@ -363,10 +514,72 @@ export function AccountDetailModal({
                       <th className="num">{t.accounts.colUsdValue}</th>
                       <th className="num">{t.accounts.col24h}</th>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {showTokens &&
-                      tokens.map((r, i) => {
+	                  </thead>
+	                  <tbody>
+	                    {holdingsGroupBy === "chain" &&
+	                      chainGroups.map((g) => {
+	                        const collapsed = collapsedChains.has(g.chain);
+	                        const headerHolding: Holding = {
+	                          kind: "tok",
+	                          sym: g.chain.slice(0, 3),
+	                          name: g.chain,
+	                          proto: "—",
+	                          chain: g.chain,
+	                          amt: "",
+	                          price: "",
+	                          usd: g.usd,
+	                          d: g.d,
+	                          c: g.color,
+	                          logo: g.logo,
+	                        };
+	                        return (
+	                          <Fragment key={`chain-${g.chain}`}>
+	                            <tr
+	                              onClick={() => toggleChain(g.chain)}
+	                              style={{
+	                                cursor: "pointer",
+	                                background: "rgba(46,139,107,0.08)",
+	                              }}
+	                            >
+	                              <td>
+	                                <HoldingIcon holding={headerHolding} />
+	                              </td>
+	                              <td>
+	                                <span
+	                                  style={{
+	                                    display: "inline-block",
+	                                    width: 12,
+	                                    fontFamily: "var(--mono)",
+	                                  }}
+	                                >
+	                                  {collapsed ? "▸" : "▾"}
+	                                </span>
+	                                <b>{g.chain}</b>{" "}
+	                                <span className="chip" style={{ marginLeft: 6 }}>
+	                                  {g.holdings.length}
+	                                </span>
+	                              </td>
+	                              <td>—</td>
+	                              <td>—</td>
+	                              <td className="num">—</td>
+	                              <td className="num">—</td>
+	                              <td className="num">
+	                                <b>{fmt$(Math.abs(g.usd))}</b>
+	                              </td>
+	                              <td className="num">
+	                                <Delta v={g.d} />
+	                              </td>
+	                            </tr>
+	                            {!collapsed &&
+	                              g.holdings.map((r, i) =>
+	                                renderHoldingRow(r, `chain-${g.chain}-${i}`, 16),
+	                              )}
+	                          </Fragment>
+	                        );
+	                      })}
+	                    {holdingsGroupBy === "assets" &&
+	                      showTokens &&
+	                      tokens.map((r, i) => {
                         const ex = isExcluded(r);
                         return (
                           <tr key={`tok-${i}`} style={excludedRowStyle(ex)}>
@@ -440,8 +653,9 @@ export function AccountDetailModal({
                           </tr>
                         );
                       })}
-                    {showPositions &&
-                      protoGroups.map((g) => {
+	                    {holdingsGroupBy === "assets" &&
+	                      showPositions &&
+	                      protoGroups.map((g) => {
                         const expanded = expandedProtos.has(g.proto);
                         const headerHolding: Holding = {
                           kind: "pos",

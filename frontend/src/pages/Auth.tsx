@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { ApiError } from "../api";
+import { ApiError, api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import { useTranslation } from "../i18n/useTranslation";
 
@@ -9,12 +9,36 @@ type Mode = "login" | "signup";
 export function Auth() {
   const { status } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const initialMode: Mode = location.pathname === "/signup" ? "signup" : "login";
   const [mode, setMode] = useState<Mode>(initialMode);
+  const [registrationEnabled, setRegistrationEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setMode(location.pathname === "/signup" ? "signup" : "login");
-  }, [location.pathname]);
+    let cancelled = false;
+    api
+      .authConfig()
+      .then((cfg) => {
+        if (!cancelled) setRegistrationEnabled(cfg.registration_enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setRegistrationEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (registrationEnabled === null) return;
+    const wantsSignup = location.pathname === "/signup";
+    if (wantsSignup && !registrationEnabled) {
+      setMode("login");
+      navigate("/login", { replace: true });
+      return;
+    }
+    setMode(wantsSignup ? "signup" : "login");
+  }, [location.pathname, navigate, registrationEnabled]);
 
   if (status === "authed") {
     return <Navigate to="/" replace />;
@@ -31,7 +55,11 @@ export function Auth() {
       </div>
 
       <div className="auth-wrap">
-        <AuthPanel mode={mode} onModeChange={setMode} />
+        <AuthPanel
+          mode={mode}
+          onModeChange={setMode}
+          registrationEnabled={registrationEnabled === true}
+        />
       </div>
     </div>
   );
@@ -40,9 +68,11 @@ export function Auth() {
 function AuthPanel({
   mode,
   onModeChange,
+  registrationEnabled,
 }: {
   mode: Mode;
   onModeChange: (m: Mode) => void;
+  registrationEnabled: boolean;
 }) {
   const { login, signup } = useAuth();
   const navigate = useNavigate();
@@ -90,6 +120,7 @@ function AuthPanel({
   };
 
   const switchTo = (m: Mode) => {
+    if (m === "signup" && !registrationEnabled) return;
     onModeChange(m);
     setErr(null);
     navigate(m === "signup" ? "/signup" : "/login", { replace: true });
@@ -112,13 +143,15 @@ function AuthPanel({
         >
           {t.auth.tabLogin}
         </button>
-        <button
-          type="button"
-          className={"auth-tab" + (mode === "signup" ? " active" : "")}
-          onClick={() => switchTo("signup")}
-        >
-          {t.auth.tabSignup}
-        </button>
+        {registrationEnabled && (
+          <button
+            type="button"
+            className={"auth-tab" + (mode === "signup" ? " active" : "")}
+            onClick={() => switchTo("signup")}
+          >
+            {t.auth.tabSignup}
+          </button>
+        )}
       </div>
 
       <form onSubmit={submit} className="col" style={{ gap: 14 }}>

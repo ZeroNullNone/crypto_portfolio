@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 SourceType = Literal["onchain", "exchange", "custom"]
+CashflowKind = Literal["deposit", "withdraw"]
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────
@@ -25,6 +26,10 @@ class UserOut(BaseModel):
     id: str
     email: str
     created_at: datetime
+
+
+class AuthConfig(BaseModel):
+    registration_enabled: bool
 
 
 # ── Accounts ─────────────────────────────────────────────────────────────
@@ -101,6 +106,7 @@ class Holding(BaseModel):
     # when its first member has no per-item logo).
     logo: Optional[str] = None
     proto_logo: Optional[str] = None
+    chain_logo: Optional[str] = None
     # Unformatted numbers — set only for `custom` source holdings so the
     # "Add assets" UI can round-trip the user's original inputs without
     # parsing the formatted `amt` / `price` strings.
@@ -123,6 +129,15 @@ class AccountDetail(Account):
     synced_at: Optional[datetime] = None
     provider: Optional[str] = None
     excluded_keys: list[str] = []
+
+
+class AccountSnapshot(BaseModel):
+    id: int
+    bal: float
+    d: float
+    synced_at: datetime
+    provider: str
+    holdings: list[Holding] = []
 
 
 # ── Groups ───────────────────────────────────────────────────────────────
@@ -188,6 +203,25 @@ class CashflowSummary(BaseModel):
     outflows_30d: float
     net_30d: float
     pending: int
+    entries: list["CashflowEntry"] = []
+
+
+class CashflowEntry(BaseModel):
+    id: int
+    kind: CashflowKind
+    amount_usd: float
+    t: datetime
+    account_id: Optional[str] = None
+    account_name: Optional[str] = None
+    note: Optional[str] = None
+
+
+class CashflowEntryCreate(BaseModel):
+    kind: CashflowKind
+    amount_usd: float = Field(gt=0.0, le=1e18, allow_inf_nan=False)
+    t: datetime
+    account_id: Optional[str] = Field(default=None, max_length=256)
+    note: Optional[str] = Field(default=None, max_length=1000)
 
 
 # ── Credentials (CEX only — global keys come from env) ───────────────────

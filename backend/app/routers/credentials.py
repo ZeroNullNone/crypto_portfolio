@@ -1,6 +1,6 @@
 """Credentials endpoints — CEX-only, per-user.
 
-DeBank and CoinStats keys are set by the deployment (via `.env`) and are not
+Provider and CoinStats keys are set by the deployment (via `.env`) and are not
 exposed to end-users.
 """
 from __future__ import annotations

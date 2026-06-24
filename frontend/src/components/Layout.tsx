@@ -15,9 +15,8 @@ interface Tab {
 const TABS: Tab[] = [
   { id: "/", labelKey: "dashboard", end: true },
   { id: "/accounts", labelKey: "accounts" },
-  // Temporarily hidden — work in progress
-  // { id: "/balance", labelKey: "balance" },
-  // { id: "/cashflow", labelKey: "cashflow" },
+  { id: "/balance", labelKey: "balance" },
+  { id: "/cashflow", labelKey: "cashflow" },
 ];
 
 // Pages where the first-run overlay should NOT block: these are where a new

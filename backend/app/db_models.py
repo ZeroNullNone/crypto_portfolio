@@ -189,6 +189,26 @@ class AccountSnapshotHistoryRow(Base):
     holdings: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
 
+class CashflowEntryRow(Base):
+    __tablename__ = "cashflow_entries"
+    __table_args__ = (Index("ix_cashflow_user_t", "user_id", "t"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    account_id: Mapped[Optional[str]] = mapped_column(
+        String, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    amount_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    t: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    note: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
 class UserAutoSyncRow(Base):
     __tablename__ = "user_auto_sync"
 

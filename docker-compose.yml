@@ -23,6 +23,20 @@ services:
       timeout: 5s
       retries: 3
 
+  auto-sync:
+    build: ./backend
+    container_name: portfolio-auto-sync
+    command: ["python", "-m", "app.jobs.auto_sync_loop"]
+    env_file:
+      - .env
+    environment:
+      - PORTFOLIO_DB_PATH=/app/data/portfolio.db
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - backend
+    restart: unless-stopped
+
   frontend:
     build: ./frontend
     container_name: portfolio-frontend

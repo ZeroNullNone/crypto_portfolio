@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .. import db_models as m
 from ..auth import current_user
 from ..db import get_db
-from ..models import Account, AccountCreate, AccountDetail, AccountUpdate
+from ..models import Account, AccountCreate, AccountDetail, AccountSnapshot, AccountUpdate
 from ..services import sync as sync_service
 from ..services.mappers import account_to_detail, account_to_model
 
@@ -84,6 +84,35 @@ def get_account(
     db: Session = Depends(get_db),
 ) -> AccountDetail:
     return account_to_detail(_get_owned(db, user.id, account_id))
+
+
+@router.get("/{account_id}/snapshots", response_model=list[AccountSnapshot])
+def account_snapshots(
+    account_id: str,
+    user: m.UserRow = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[AccountSnapshot]:
+    _get_owned(db, user.id, account_id)
+    rows = (
+        db.query(m.AccountSnapshotHistoryRow)
+        .filter(
+            m.AccountSnapshotHistoryRow.user_id == user.id,
+            m.AccountSnapshotHistoryRow.account_id == account_id,
+        )
+        .order_by(m.AccountSnapshotHistoryRow.synced_at.asc())
+        .all()
+    )
+    return [
+        AccountSnapshot(
+            id=row.id,
+            bal=float(row.bal or 0.0),
+            d=float(row.d or 0.0),
+            synced_at=row.synced_at,
+            provider=row.provider,
+            holdings=row.holdings or [],
+        )
+        for row in rows
+    ]
 
 
 @router.post("", response_model=Account, status_code=201)
