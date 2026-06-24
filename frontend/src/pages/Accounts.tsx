@@ -194,6 +194,49 @@ const UNASSIGNED_FALLBACK: Group = {
 };
 
 const HIDE_THRESHOLD_USD = 1;
+const EXCHANGE_CHAIN_PREFIXES = [
+  "binance",
+  "bybit",
+  "bitget",
+  "okx",
+  "gate",
+  "extended",
+  "derive",
+  "hyperliquid",
+];
+
+function exchangePrefix(chain: string): string | null {
+  const lower = chain.toLowerCase();
+  return EXCHANGE_CHAIN_PREFIXES.find(
+    (prefix) => lower === prefix || lower.startsWith(`${prefix}-`),
+  ) ?? null;
+}
+
+function accountBucketLabel(chain: string): string {
+  const lower = chain.toLowerCase();
+  if (lower === "custom") return "custom";
+  const prefix = exchangePrefix(chain);
+  if (!prefix) return chain;
+  const bucket = lower.slice(prefix.length).replace(/^-/, "");
+  if (!bucket) return prefix;
+  if (bucket.includes("earn")) return "Earn";
+  if (bucket.includes("spot")) return "Spot";
+  if (bucket.includes("funding")) return "Funding";
+  if (bucket.includes("copy")) return "Copy trading";
+  if (bucket.includes("tradingbot")) return "Trading bot";
+  if (bucket.includes("portfolio")) return "Portfolio";
+  if (bucket.includes("usdm")) return "USD-M";
+  if (bucket.includes("coinm")) return "COIN-M";
+  return bucket
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function chainBadgeLabel(chain: string): string {
+  return exchangePrefix(chain) ?? chain;
+}
 
 function HoldingIcon({ holding, size = 24 }: { holding: Holding; size?: number }) {
   const [failed, setFailed] = useState(false);
@@ -691,6 +734,11 @@ export function Accounts() {
     () => groupHoldingsByChain(filteredVisibleHoldings, isExcluded),
     [filteredVisibleHoldings, excludedSet, selectedSnapshot],
   );
+  const groupByAccountBuckets =
+    activeGroup || (detail.data && detail.data.source !== "onchain");
+  const primaryGroupByLabel = groupByAccountBuckets
+    ? t.accounts.groupByAccounts
+    : t.accounts.groupByChain;
 
   const toggleExcluded = async (h: Holding) => {
     if (!detail.data || !h.key || busyExclusion) return;
@@ -763,7 +811,7 @@ export function Accounts() {
             className="src chain"
             style={{ borderColor: "var(--line)", color: "var(--ink-2)" }}
           >
-            {r.chain}
+            {chainBadgeLabel(r.chain)}
           </span>
         </td>
         <td className="num">{r.amt}</td>
@@ -875,6 +923,20 @@ export function Accounts() {
           <h2>{t.accounts.title}</h2>
         </div>
         <div className="row" style={{ gap: 12, alignItems: "center" }}>
+          <button
+            className="wbtn primary"
+            onClick={() => setAccountPanel({ mode: "new" })}
+            title={t.accounts.addAccountTitle}
+          >
+            {t.accounts.addAccount}
+          </button>
+          <button
+            className="wbtn"
+            onClick={() => setGroupModal({ mode: "new" })}
+            title={t.accounts.addGroupTitle}
+          >
+            {t.accounts.addGroup}
+          </button>
           <SyncButton
             sync={() => api.syncAll()}
             onDone={refreshAfterSync}
@@ -953,24 +1015,6 @@ export function Accounts() {
                 <span className="mono-xs">
                   {t.accounts.treeTitle} <span className="tiny">({all.length})</span>
                 </span>
-                <div className="row" style={{ gap: 4 }}>
-                  <button
-                    className="wbtn"
-                    onClick={() => setGroupModal({ mode: "new" })}
-                    title={t.accounts.addGroupTitle}
-                    style={{ padding: "2px 8px", fontSize: 11 }}
-                  >
-                    {t.accounts.addGroup}
-                  </button>
-                  <button
-                    className="wbtn primary"
-                    onClick={() => setAccountPanel({ mode: "new" })}
-                    title={t.accounts.addAccountTitle}
-                    style={{ padding: "2px 8px", fontSize: 11 }}
-                  >
-                    {t.accounts.addAccount}
-                  </button>
-                </div>
               </div>
               <div
                 className="col"
@@ -1468,17 +1512,21 @@ export function Accounts() {
 	                    <span className="mono-xs">{t.accounts.holdingsTitle}</span>
 	                    <span className="mono-xs">|</span>
 	                    <span className="mono-xs">{t.accounts.groupBy}</span>
-	                    <span
-	                      className={"pill" + (holdingsGroupBy === "chain" ? " active" : "")}
-	                      onClick={() => setHoldingsGroupBy("chain")}
-	                    >
-	                      {t.accounts.groupByChain}
-	                    </span>
-	                    <span
-	                      className={"pill" + (holdingsGroupBy === "assets" ? " active" : "")}
-	                      onClick={() => setHoldingsGroupBy("assets")}
-	                    >
-	                      {t.accounts.groupByAssets}
+	                    <span className="segmented">
+	                      <button
+	                        type="button"
+	                        className={holdingsGroupBy === "chain" ? "active" : ""}
+	                        onClick={() => setHoldingsGroupBy("chain")}
+	                      >
+	                        {primaryGroupByLabel}
+	                      </button>
+	                      <button
+	                        type="button"
+	                        className={holdingsGroupBy === "assets" ? "active" : ""}
+	                        onClick={() => setHoldingsGroupBy("assets")}
+	                      >
+	                        {t.accounts.groupByAssets}
+	                      </button>
 	                    </span>
 	                  </div>
 	                  <div className="row" style={{ gap: 10, alignItems: "center" }}>
@@ -1565,10 +1613,11 @@ export function Accounts() {
 	                      {holdingsGroupBy === "chain" &&
 	                        chainGroups.map((g) => {
 	                          const collapsed = collapsedChains.has(g.chain);
+	                          const chainLabel = accountBucketLabel(g.chain);
 	                          const headerHolding: Holding = {
 	                            kind: "tok",
-	                            sym: g.chain.slice(0, 3),
-	                            name: g.chain,
+	                            sym: chainLabel.slice(0, 3),
+	                            name: chainLabel,
 	                            proto: "—",
 	                            chain: g.chain,
 	                            amt: "",
@@ -1600,7 +1649,7 @@ export function Accounts() {
 	                                  >
 	                                    {collapsed ? "▸" : "▾"}
 	                                  </span>
-	                                  <b>{g.chain}</b>{" "}
+	                                  <b>{chainLabel}</b>{" "}
 	                                  <span className="chip" style={{ marginLeft: 6 }}>
 	                                    {g.holdings.length}
 	                                  </span>
@@ -1663,7 +1712,7 @@ export function Accounts() {
                                     color: "var(--ink-2)",
                                   }}
                                 >
-                                  {r.chain}
+                                  {chainBadgeLabel(r.chain)}
                                 </span>
                               </td>
                               <td className="num">{r.amt}</td>
@@ -1778,7 +1827,7 @@ export function Accounts() {
                                       color: "var(--ink-2)",
                                     }}
                                   >
-                                    {g.chain}
+                                    {chainBadgeLabel(g.chain)}
                                   </span>
                                 </td>
                                 <td className="num">—</td>
@@ -1834,7 +1883,7 @@ export function Accounts() {
                                             color: "var(--ink-2)",
                                           }}
                                         >
-                                          {r.chain}
+                                          {chainBadgeLabel(r.chain)}
                                         </span>
                                       </td>
                                       <td className="num">{r.amt}</td>

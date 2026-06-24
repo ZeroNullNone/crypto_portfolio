@@ -10,12 +10,13 @@ import { SYNC_ALL_CONFIRM, SyncButton } from "../components/SyncButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { AccountDetailModal } from "../components/AccountDetailModal";
 import { useTranslation } from "../i18n/useTranslation";
-import type { Account, BalancePoint, Group, SourceType } from "../types";
+import type { Account, BalancePoint, CashflowEntry, Group, SourceType } from "../types";
 import type { StackedSeries } from "../lib/charts";
 
 type SortKey = "name" | "group" | "source" | "bal" | "d" | "pct";
 type SortDir = "asc" | "desc";
 type PortfolioChartMode = "line" | "asset" | "wallet" | "group";
+type PortfolioChartMetric = "balance" | "performance";
 const NUMERIC_KEYS: ReadonlySet<SortKey> = new Set(["bal", "d", "pct"]);
 const CHART_RANGES = [
   { k: "7D", l: "1w" },
@@ -50,6 +51,7 @@ export function Dashboard() {
   // without us snapping back to a number on every keystroke.
   const [thresholdDraft, setThresholdDraft] = useState<string>(String(threshold));
   const minUsd = hideLowBalance ? threshold : 0;
+  const [chartMetric, setChartMetric] = useState<PortfolioChartMetric>("balance");
   const [chartMode, setChartMode] = useState<PortfolioChartMode>("line");
   const [chartRange, setChartRange] = useState<ChartRange>("30D");
   const [chartExpanded, setChartExpanded] = useState(false);
@@ -67,6 +69,8 @@ export function Dashboard() {
     [chartRange],
     `balance:history:${chartRange}`,
   );
+  const allHistory = useApi(() => api.balanceHistory("ALL"), [], "balance:history:ALL");
+  const allCashflow = useApi(() => api.cashflow("ALL"), [], "cashflow:ALL");
 
   const total = summary.data?.total ?? 0;
   const lastSync = summary.data?.last_sync_at
@@ -75,8 +79,18 @@ export function Dashboard() {
 
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const performanceSeries = useMemo(
+    () =>
+      filterSeriesByRange(
+        buildPerformanceSeries(allHistory.data?.total, allCashflow.data?.entries),
+        chartRange,
+      ),
+    [allHistory.data?.total, allCashflow.data?.entries, chartRange],
+  );
+  const chartTotal =
+    chartMetric === "performance" ? performanceSeries : history.data?.total;
   const stackSeries = useMemo(() => {
-    if (!history.data || chartMode === "line") return [];
+    if (!history.data || chartMetric === "performance" || chartMode === "line") return [];
     const source =
       chartMode === "asset"
         ? (history.data.by_asset ?? {})
@@ -84,19 +98,23 @@ export function Dashboard() {
           ? (history.data.by_wallet ?? {})
           : (history.data.by_group ?? {});
     return toStackedSeries(source, t.dashboard.otherSeries, chartMode === "asset" ? 9 : 10);
-  }, [chartMode, history.data, t.dashboard.otherSeries]);
+  }, [chartMetric, chartMode, history.data, t.dashboard.otherSeries]);
   const chartTitle = useMemo(() => {
     const rangeLabel = CHART_RANGES.find((r) => r.k === chartRange)?.l ?? chartRange;
+    const metricLabel =
+      chartMetric === "performance"
+        ? t.dashboard.chartPerformance
+        : t.dashboard.chartBalance;
     const modeLabel =
-      chartMode === "line"
+      chartMetric === "performance" || chartMode === "line"
         ? t.dashboard.chartLine
         : chartMode === "asset"
           ? t.dashboard.chartByAsset
           : chartMode === "wallet"
             ? t.dashboard.chartByWallet
             : t.dashboard.chartByGroup;
-    return t.dashboard.portfolioChartTitle(modeLabel, rangeLabel);
-  }, [chartMode, chartRange, t]);
+    return t.dashboard.portfolioChartTitle(metricLabel, modeLabel, rangeLabel);
+  }, [chartMetric, chartMode, chartRange, t]);
   const toggleSort = (key: SortKey) => {
     setSort((prev) => {
       if (prev?.key !== key) {
@@ -146,6 +164,7 @@ export function Dashboard() {
     groups.refetch();
     topAssets.refetch();
     history.refetch();
+    allHistory.refetch();
   };
 
   return (
@@ -176,77 +195,80 @@ export function Dashboard() {
           fontSize: 11,
         }}
       >
-        <div className="col" style={{ gap: 10 }}>
-          <div className="sketch-box p-12">
-            <div className="row between">
-              <div>
-                <div className="mono-xs">{t.dashboard.net}</div>
-                <div className="head" style={{ fontSize: 44, lineHeight: 1 }}>
-                  {fmt$(total)}
-                </div>
-              </div>
-              <div
-                className="col"
-                style={{ gap: 2, textAlign: "right", alignItems: "flex-end" }}
-              >
-                <span>
-                  {t.dashboard.col24h}{" "}
-                  <span
-                    className={
-                      (summary.data?.change_24h_usd ?? 0) >= 0 ? "accent-2" : "accent"
-                    }
-                  >
-                    {summary.data
-                      ? (summary.data.change_24h_usd >= 0 ? "+" : "−") +
-                        fmt$(Math.abs(summary.data.change_24h_usd))
-                      : "—"}
-                  </span>
-                </span>
-                <span className="tiny" style={{ color: "var(--muted)" }}>
-                  {t.dashboard.accountsLine(
-                    summary.data?.accounts_count ?? 0,
-                    Object.entries(summary.data?.sources_breakdown ?? {})
-                      .map(([k, v]) => `${v} ${k}`)
-                      .join(" · "),
-                  )}
-                </span>
+        <div className="sketch-box p-12" style={{ gridColumn: "1 / -1" }}>
+          <div className="row between">
+            <div>
+              <div className="mono-xs">{t.dashboard.net}</div>
+              <div className="head" style={{ fontSize: 44, lineHeight: 1 }}>
+                {fmt$(total)}
               </div>
             </div>
             <div
-              className="row between wrap"
-              style={{ gap: 8, marginTop: 12, alignItems: "center" }}
+              className="col"
+              style={{ gap: 2, textAlign: "right", alignItems: "flex-end" }}
             >
-              <PortfolioChartControls
-                mode={chartMode}
-                range={chartRange}
-                onModeChange={setChartMode}
-                onRangeChange={setChartRange}
-              />
-              <div className="row wrap" style={{ gap: 4, justifyContent: "flex-end" }}>
-                <button
-                  type="button"
-                  className="wbtn"
-                  onClick={() => setChartExpanded(true)}
-                  aria-label={t.dashboard.expandChart}
-                  title={t.dashboard.expandChart}
-                  style={{ width: 30, height: 26, padding: 0, lineHeight: 1 }}
+              <span>
+                {t.dashboard.col24h}{" "}
+                <span
+                  className={
+                    (summary.data?.change_24h_usd ?? 0) >= 0 ? "accent-2" : "accent"
+                  }
                 >
-                  ⛶
-                </button>
-              </div>
-            </div>
-            <div className="mono-xs" style={{ marginTop: 8 }}>
-              {chartTitle}
-            </div>
-            <div style={{ height: 180, marginTop: 4 }}>
-              <PortfolioChart
-                mode={chartMode}
-                total={history.data?.total}
-                stackSeries={stackSeries}
-              />
+                  {summary.data
+                    ? (summary.data.change_24h_usd >= 0 ? "+" : "−") +
+                      fmt$(Math.abs(summary.data.change_24h_usd))
+                    : "—"}
+                </span>
+              </span>
+              <span className="tiny" style={{ color: "var(--muted)" }}>
+                {t.dashboard.accountsLine(
+                  summary.data?.accounts_count ?? 0,
+                  Object.entries(summary.data?.sources_breakdown ?? {})
+                    .map(([k, v]) => `${v} ${k}`)
+                    .join(" · "),
+                )}
+              </span>
             </div>
           </div>
+          <div
+            className="row between wrap"
+            style={{ gap: 8, marginTop: 12, alignItems: "center" }}
+          >
+            <PortfolioChartControls
+              metric={chartMetric}
+              mode={chartMode}
+              range={chartRange}
+              onMetricChange={setChartMetric}
+              onModeChange={setChartMode}
+              onRangeChange={setChartRange}
+            />
+            <div className="row wrap" style={{ gap: 4, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="wbtn"
+                onClick={() => setChartExpanded(true)}
+                aria-label={t.dashboard.expandChart}
+                title={t.dashboard.expandChart}
+                style={{ width: 30, height: 26, padding: 0, lineHeight: 1 }}
+              >
+                ⛶
+              </button>
+            </div>
+          </div>
+          <div className="mono-xs" style={{ marginTop: 8 }}>
+            {chartTitle}
+          </div>
+          <div style={{ height: 180, marginTop: 4 }}>
+            <PortfolioChart
+              metric={chartMetric}
+              mode={chartMode}
+              total={chartTotal}
+              stackSeries={stackSeries}
+            />
+          </div>
+        </div>
 
+        <div className="col" style={{ gap: 10 }}>
           <div className="sketch-box p-12">
             <div className="mono-xs mb-8">{t.dashboard.allAccounts}</div>
             <table className="sk" style={{ fontSize: 11 }}>
@@ -379,10 +401,12 @@ export function Dashboard() {
       {chartExpanded && (
         <PortfolioChartModal
           title={chartTitle}
+          metric={chartMetric}
           mode={chartMode}
           range={chartRange}
-          total={history.data?.total}
+          total={chartTotal}
           stackSeries={stackSeries}
+          onMetricChange={setChartMetric}
           onModeChange={setChartMode}
           onRangeChange={setChartRange}
           onClose={() => setChartExpanded(false)}
@@ -392,11 +416,79 @@ export function Dashboard() {
       {selectedAccountId && (
         <AccountDetailModal
           accountId={selectedAccountId}
+          onHistoryChange={() => {
+            history.refetch();
+            allHistory.refetch();
+          }}
           onClose={() => setSelectedAccountId(null)}
         />
       )}
     </div>
   );
+}
+
+function buildPerformanceSeries(
+  total: BalancePoint[] | undefined,
+  entries: CashflowEntry[] | undefined,
+): BalancePoint[] {
+  const points = [...(total ?? [])].sort(
+    (a, b) => new Date(a.t).getTime() - new Date(b.t).getTime(),
+  );
+  if (points.length === 0) return [];
+
+  const first = points[0];
+  const firstMs = new Date(first.t).getTime();
+  if (!Number.isFinite(firstMs)) return [];
+
+  const flows = (entries ?? [])
+    .map((entry) => ({
+      ms: new Date(entry.t).getTime(),
+      v: entry.kind === "deposit" ? entry.amount_usd : -entry.amount_usd,
+    }))
+    .filter((entry) => Number.isFinite(entry.ms) && entry.ms > firstMs)
+    .sort((a, b) => a.ms - b.ms);
+
+  let flowIndex = 0;
+  let netFlow = 0;
+  return points.map((point) => {
+    const pointMs = new Date(point.t).getTime();
+    while (flowIndex < flows.length && flows[flowIndex].ms <= pointMs) {
+      netFlow += flows[flowIndex].v;
+      flowIndex += 1;
+    }
+    return {
+      t: point.t,
+      v: Math.round((point.v - first.v - netFlow) * 100) / 100,
+    };
+  });
+}
+
+function filterSeriesByRange(series: BalancePoint[], range: ChartRange): BalancePoint[] {
+  const now = Date.now();
+  const cutoff =
+    range === "YTD"
+      ? Date.UTC(new Date().getUTCFullYear(), 0, 1)
+      : now - rangeDays(range) * 24 * 3600 * 1000;
+  return series.filter((point) => {
+    const ms = new Date(point.t).getTime();
+    return Number.isFinite(ms) && ms >= cutoff;
+  });
+}
+
+function rangeDays(range: ChartRange): number {
+  switch (range) {
+    case "7D":
+      return 7;
+    case "90D":
+      return 90;
+    case "180D":
+      return 180;
+    case "365D":
+      return 365;
+    case "30D":
+    default:
+      return 30;
+  }
 }
 
 function toStackedSeries(
@@ -437,34 +529,53 @@ function toStackedSeries(
 }
 
 function PortfolioChart({
+  metric,
   mode,
   total,
   stackSeries,
 }: {
+  metric: PortfolioChartMetric;
   mode: PortfolioChartMode;
   total?: BalancePoint[];
   stackSeries: StackedSeries[];
 }) {
   if ((total?.length ?? 0) < 1) return <ChartPlaceholder />;
-  if (mode === "line") {
-    return <LineChart seed={2} trend={0.4} series={total} xAxis rangeSelect />;
+  if (metric === "performance" || mode === "line") {
+    return (
+      <LineChart
+        seed={2}
+        trend={0.4}
+        color={metric === "performance" ? "#2e8b6b" : "#1a1814"}
+        series={total}
+        xAxis
+        rangeSelect
+      />
+    );
   }
   if (stackSeries.length === 0) return <ChartPlaceholder />;
   return <StackedArea series={stackSeries} xAxis />;
 }
 
 function PortfolioChartControls({
+  metric,
   mode,
   range,
+  onMetricChange,
   onModeChange,
   onRangeChange,
 }: {
+  metric: PortfolioChartMetric;
   mode: PortfolioChartMode;
   range: ChartRange;
+  onMetricChange: (metric: PortfolioChartMetric) => void;
   onModeChange: (mode: PortfolioChartMode) => void;
   onRangeChange: (range: ChartRange) => void;
 }) {
   const t = useTranslation();
+  const metrics: Array<{ k: PortfolioChartMetric; l: string }> = [
+    { k: "balance", l: t.dashboard.chartBalance },
+    { k: "performance", l: t.dashboard.chartPerformance },
+  ];
   const modes: Array<{ k: PortfolioChartMode; l: string }> = [
     { k: "line", l: t.dashboard.chartLine },
     { k: "group", l: t.dashboard.chartByGroup },
@@ -474,18 +585,32 @@ function PortfolioChartControls({
 
   return (
     <>
-      <div className="row wrap" style={{ gap: 4 }}>
-        {modes.map((item) => (
+      <div className="segmented">
+        {metrics.map((item) => (
           <button
             key={item.k}
             type="button"
-            className={"pill" + (mode === item.k ? " active" : "")}
-            onClick={() => onModeChange(item.k)}
+            className={metric === item.k ? "active" : ""}
+            onClick={() => onMetricChange(item.k)}
             style={{ fontSize: 12, padding: "3px 9px" }}
           >
             {item.l}
           </button>
         ))}
+      </div>
+      <div className="row wrap" style={{ gap: 4 }}>
+        {metric === "balance" &&
+          modes.map((item) => (
+            <button
+              key={item.k}
+              type="button"
+              className={"pill" + (mode === item.k ? " active" : "")}
+              onClick={() => onModeChange(item.k)}
+              style={{ fontSize: 12, padding: "3px 9px" }}
+            >
+              {item.l}
+            </button>
+          ))}
       </div>
       <div className="row wrap" style={{ gap: 4, justifyContent: "flex-end" }}>
         {CHART_RANGES.map((item) => (
@@ -506,19 +631,23 @@ function PortfolioChartControls({
 
 function PortfolioChartModal({
   title,
+  metric,
   mode,
   range,
   total,
   stackSeries,
+  onMetricChange,
   onModeChange,
   onRangeChange,
   onClose,
 }: {
   title: string;
+  metric: PortfolioChartMetric;
   mode: PortfolioChartMode;
   range: ChartRange;
   total?: BalancePoint[];
   stackSeries: StackedSeries[];
+  onMetricChange: (metric: PortfolioChartMetric) => void;
   onModeChange: (mode: PortfolioChartMode) => void;
   onRangeChange: (range: ChartRange) => void;
   onClose: () => void;
@@ -589,14 +718,21 @@ function PortfolioChartModal({
         </div>
         <div className="row between wrap" style={{ gap: 8, alignItems: "center" }}>
           <PortfolioChartControls
+            metric={metric}
             mode={mode}
             range={range}
+            onMetricChange={onMetricChange}
             onModeChange={onModeChange}
             onRangeChange={onRangeChange}
           />
         </div>
         <div style={{ flex: 1, minHeight: 0 }}>
-          <PortfolioChart mode={mode} total={total} stackSeries={stackSeries} />
+          <PortfolioChart
+            metric={metric}
+            mode={mode}
+            total={total}
+            stackSeries={stackSeries}
+          />
         </div>
       </div>
     </div>,

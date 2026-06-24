@@ -112,6 +112,30 @@ a { color: inherit; text-decoration: none; }
 }
 .pill.active { background: var(--ink); color: var(--paper); }
 
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  background: #fbfbfa;
+}
+.segmented button {
+  border: 0;
+  background: transparent;
+  padding: 4px 12px;
+  font-family: var(--head);
+  font-weight: 500;
+  letter-spacing: 0;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.segmented button.active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
 /* ── Top nav ───────────────────────────────────────────────── */
 .nav {
   border-bottom: 1.5px solid var(--line);

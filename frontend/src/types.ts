@@ -68,7 +68,13 @@ export interface AccountSnapshot {
   d: number;
   synced_at: string;
   provider: string;
+  editable: boolean;
   holdings: Holding[];
+}
+
+export interface AccountHistoryPointInput {
+  bal: number;
+  synced_at: string;
 }
 
 export interface Group {

@@ -5,12 +5,103 @@ import { ChartPlaceholder, Delta, LineChart } from "../lib/charts";
 import { fmt$ } from "../lib/format";
 import { useApi } from "../hooks/useApi";
 import { useTranslation } from "../i18n/useTranslation";
-import type { Holding } from "../types";
+import type { AccountHistoryPointInput, AccountSnapshot, Holding } from "../types";
 
 type FilterMode = "all" | "tok" | "pos";
 type HoldingsGroupBy = "assets" | "chain";
+type HistoryDraft = {
+  key: string;
+  id?: number;
+  date: string;
+  time: string;
+  bal: string;
+};
 
 const HIDE_THRESHOLD_USD = 1;
+const EXCHANGE_CHAIN_PREFIXES = [
+  "binance",
+  "bybit",
+  "bitget",
+  "okx",
+  "gate",
+  "extended",
+  "derive",
+  "hyperliquid",
+];
+
+function exchangePrefix(chain: string): string | null {
+  const lower = chain.toLowerCase();
+  return EXCHANGE_CHAIN_PREFIXES.find(
+    (prefix) => lower === prefix || lower.startsWith(`${prefix}-`),
+  ) ?? null;
+}
+
+function accountBucketLabel(chain: string): string {
+  const lower = chain.toLowerCase();
+  if (lower === "custom") return "custom";
+  const prefix = exchangePrefix(chain);
+  if (!prefix) return chain;
+  const bucket = lower.slice(prefix.length).replace(/^-/, "");
+  if (!bucket) return prefix;
+  if (bucket.includes("earn")) return "Earn";
+  if (bucket.includes("spot")) return "Spot";
+  if (bucket.includes("funding")) return "Funding";
+  if (bucket.includes("copy")) return "Copy trading";
+  if (bucket.includes("tradingbot")) return "Trading bot";
+  if (bucket.includes("portfolio")) return "Portfolio";
+  if (bucket.includes("usdm")) return "USD-M";
+  if (bucket.includes("coinm")) return "COIN-M";
+  return bucket
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function chainBadgeLabel(chain: string): string {
+  return exchangePrefix(chain) ?? chain;
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function localDateValue(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function localTimeValue(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function snapshotDraft(s: AccountSnapshot): HistoryDraft {
+  const d = new Date(s.synced_at);
+  return {
+    key: String(s.id),
+    id: s.id,
+    date: localDateValue(d),
+    time: localTimeValue(d),
+    bal: String(Math.round((s.bal || 0) * 100) / 100),
+  };
+}
+
+function defaultHistoryDraft(): HistoryDraft {
+  return {
+    key: `new-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    date: localDateValue(new Date()),
+    time: "23:59",
+    bal: "",
+  };
+}
+
+function historyInput(draft: HistoryDraft): AccountHistoryPointInput | null {
+  const bal = Number(draft.bal.replace(/[$,\s]/g, ""));
+  const t = new Date(`${draft.date}T${draft.time || "23:59"}`);
+  if (!draft.date || Number.isNaN(t.getTime()) || !Number.isFinite(bal) || bal < 0) {
+    return null;
+  }
+  return { bal, synced_at: t.toISOString() };
+}
 
 function HoldingIcon({ holding, size = 24 }: { holding: Holding; size?: number }) {
   const [failed, setFailed] = useState(false);
@@ -141,9 +232,11 @@ function groupHoldingsByChain(
 export function AccountDetailModal({
   accountId,
   onClose,
+  onHistoryChange,
 }: {
   accountId: string;
   onClose: () => void;
+  onHistoryChange?: () => void;
 }) {
   const t = useTranslation();
   const detail = useApi(
@@ -156,12 +249,23 @@ export function AccountDetailModal({
     [],
     "balance:history:ALL",
   );
+  const snapshots = useApi(
+    () => api.accountSnapshots(accountId),
+    [accountId],
+    `account:${accountId}:snapshots`,
+  );
 
   const [filter, setFilter] = useState<FilterMode>("all");
   const [holdingsGroupBy, setHoldingsGroupBy] = useState<HoldingsGroupBy>("assets");
   const [hideDust, setHideDust] = useState(true);
   const [expandedProtos, setExpandedProtos] = useState<Set<string>>(new Set());
   const [collapsedChains, setCollapsedChains] = useState<Set<string>>(new Set());
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [newHistoryRows, setNewHistoryRows] = useState<HistoryDraft[]>([]);
+  const [editingHistory, setEditingHistory] = useState<Record<number, HistoryDraft>>({});
+  const [deletedHistoryIds, setDeletedHistoryIds] = useState<Set<number>>(new Set());
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyErr, setHistoryErr] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -170,6 +274,14 @@ export function AccountDetailModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    setHistoryOpen(false);
+    setNewHistoryRows([]);
+    setEditingHistory({});
+    setDeletedHistoryIds(new Set());
+    setHistoryErr(null);
+  }, [accountId]);
 
   const toggleProto = (name: string) => {
     setExpandedProtos((prev) => {
@@ -186,6 +298,72 @@ export function AccountDetailModal({
       else next.add(name);
       return next;
     });
+  };
+
+  const existingHistoryRows = (snapshots.data ?? [])
+    .filter((row) => !deletedHistoryIds.has(row.id))
+    .sort(
+      (a, b) =>
+        new Date(a.synced_at).getTime() - new Date(b.synced_at).getTime(),
+    );
+  const historyDrafts = [...Object.values(editingHistory), ...newHistoryRows];
+  const historyHasChanges =
+    historyDrafts.length > 0 || deletedHistoryIds.size > 0;
+  const historyCanSave =
+    historyHasChanges &&
+    !historyBusy &&
+    historyDrafts.every((draft) => historyInput(draft) !== null);
+
+  const updateExistingHistory = (id: number, patch: Partial<HistoryDraft>) => {
+    setEditingHistory((prev) => {
+      const current = prev[id];
+      if (!current) return prev;
+      return { ...prev, [id]: { ...current, ...patch } };
+    });
+  };
+
+  const updateNewHistory = (key: string, patch: Partial<HistoryDraft>) => {
+    setNewHistoryRows((prev) =>
+      prev.map((row) => (row.key === key ? { ...row, ...patch } : row)),
+    );
+  };
+
+  const resetHistoryDrafts = () => {
+    setNewHistoryRows([]);
+    setEditingHistory({});
+    setDeletedHistoryIds(new Set());
+    setHistoryErr(null);
+  };
+
+  const saveHistory = async () => {
+    if (!detail.data || !historyCanSave) return;
+    setHistoryBusy(true);
+    setHistoryErr(null);
+    try {
+      for (const id of deletedHistoryIds) {
+        await api.deleteAccountSnapshot(detail.data.id, id);
+      }
+      for (const draft of Object.values(editingHistory)) {
+        if (draft.id == null) continue;
+        const body = historyInput(draft);
+        if (!body) throw new Error(t.accounts.historyInvalid);
+        await api.updateAccountSnapshot(detail.data.id, draft.id, body);
+      }
+      for (const draft of newHistoryRows) {
+        const body = historyInput(draft);
+        if (!body) throw new Error(t.accounts.historyInvalid);
+        await api.createAccountSnapshot(detail.data.id, body);
+      }
+      resetHistoryDrafts();
+      snapshots.refetch();
+      history.refetch();
+      detail.refetch();
+      onHistoryChange?.();
+    } catch (err) {
+      setHistoryErr(err instanceof Error ? err.message : t.common.failed);
+    } finally {
+      setHistoryBusy(false);
+    }
   };
 
   const holdings: Holding[] = detail.data?.holdings ?? [];
@@ -212,6 +390,10 @@ export function AccountDetailModal({
     () => groupHoldingsByChain(filteredVisibleHoldings, isExcluded),
     [filteredVisibleHoldings, excludedSet],
   );
+  const primaryGroupByLabel =
+    detail.data?.source === "onchain"
+      ? t.accounts.groupByChain
+      : t.accounts.groupByAccounts;
 
   const showTokens = filter === "all" || filter === "tok";
   const showPositions = filter === "all" || filter === "pos";
@@ -265,7 +447,7 @@ export function AccountDetailModal({
               color: "var(--ink-2)",
             }}
           >
-            {r.chain}
+            {chainBadgeLabel(r.chain)}
           </span>
         </td>
         <td className="num">{r.amt}</td>
@@ -298,6 +480,90 @@ export function AccountDetailModal({
         </td>
         <td className="num">
           <Delta v={r.d} />
+        </td>
+      </tr>
+    );
+  };
+
+  const renderHistoryEditRow = (
+    draft: HistoryDraft,
+    update: (patch: Partial<HistoryDraft>) => void,
+    remove: () => void,
+  ) => (
+    <tr key={draft.key}>
+      <td>
+        <input
+          className="winput"
+          type="date"
+          value={draft.date}
+          onChange={(e) => update({ date: e.target.value })}
+        />
+      </td>
+      <td>
+        <input
+          className="winput"
+          type="time"
+          value={draft.time}
+          onChange={(e) => update({ time: e.target.value })}
+        />
+      </td>
+      <td>
+        <input
+          className="winput"
+          inputMode="decimal"
+          value={draft.bal}
+          onChange={(e) => update({ bal: e.target.value })}
+        />
+      </td>
+      <td className="num">
+        <button type="button" className="wbtn accent" onClick={remove}>
+          {t.accounts.historyRemove}
+        </button>
+      </td>
+    </tr>
+  );
+
+  const renderHistoryRow = (row: AccountSnapshot) => {
+    const editing = editingHistory[row.id];
+    if (editing) {
+      return renderHistoryEditRow(
+        editing,
+        (patch) => updateExistingHistory(row.id, patch),
+        () => {
+          setEditingHistory((prev) => {
+            const next = { ...prev };
+            delete next[row.id];
+            return next;
+          });
+          setDeletedHistoryIds((prev) => new Set(prev).add(row.id));
+        },
+      );
+    }
+    const d = new Date(row.synced_at);
+    return (
+      <tr key={row.id}>
+        <td>{localDateValue(d)}</td>
+        <td>{localTimeValue(d)}</td>
+        <td className="num">{fmt$(row.bal)}</td>
+        <td className="num">
+          {row.editable ? (
+            <button
+              type="button"
+              className="wbtn"
+              onClick={() =>
+                setEditingHistory((prev) => ({
+                  ...prev,
+                  [row.id]: snapshotDraft(row),
+                }))
+              }
+            >
+              {t.accounts.historyEdit}
+            </button>
+          ) : (
+            <span className="tiny" style={{ color: "var(--muted)" }}>
+              {t.common.synced}
+            </span>
+          )}
         </td>
       </tr>
     );
@@ -433,6 +699,101 @@ export function AccountDetailModal({
             )}
           </div>
 
+          {detail.data &&
+            (historyOpen ? (
+              <div className="sketch-box p-16">
+                <div className="row between mb-12">
+                  <span className="mono-xs">{t.accounts.balanceHistoryTitle}</span>
+                  <button
+                    type="button"
+                    className="wbtn"
+                    onClick={() => {
+                      setHistoryOpen(false);
+                      resetHistoryDrafts();
+                    }}
+                    aria-label={t.common.close}
+                    style={{ width: 34, height: 34, padding: 0 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="tiny" style={{ color: "var(--muted)", marginBottom: 12 }}>
+                  {t.accounts.balanceHistoryHelp}
+                </div>
+                <table className="sk">
+                  <thead>
+                    <tr>
+                      <th>{t.accounts.historyDate}</th>
+                      <th>{t.accounts.historyTime}</th>
+                      <th className="num">{t.accounts.historyBalance}</th>
+                      <th className="num"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {newHistoryRows.map((row) =>
+                      renderHistoryEditRow(
+                        row,
+                        (patch) => updateNewHistory(row.key, patch),
+                        () =>
+                          setNewHistoryRows((prev) =>
+                            prev.filter((draft) => draft.key !== row.key),
+                          ),
+                      ),
+                    )}
+                    {existingHistoryRows.map(renderHistoryRow)}
+                    {!snapshots.loading &&
+                      newHistoryRows.length === 0 &&
+                      existingHistoryRows.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="tiny muted">
+                            {t.accounts.historyEmpty}
+                          </td>
+                        </tr>
+                      )}
+                  </tbody>
+                </table>
+                {snapshots.loading && (
+                  <div className="tiny muted" style={{ paddingTop: 8 }}>
+                    {t.common.loading}
+                  </div>
+                )}
+                {(historyErr || snapshots.error) && (
+                  <div className="tiny" style={{ color: "var(--accent)", paddingTop: 8 }}>
+                    {historyErr || snapshots.error?.message}
+                  </div>
+                )}
+                <div className="row between" style={{ marginTop: 12 }}>
+                  <button
+                    type="button"
+                    className="wbtn"
+                    onClick={() =>
+                      setNewHistoryRows((prev) => [defaultHistoryDraft(), ...prev])
+                    }
+                    disabled={historyBusy}
+                  >
+                    {t.accounts.historyAdd}
+                  </button>
+                  <button
+                    type="button"
+                    className="wbtn primary"
+                    onClick={saveHistory}
+                    disabled={!historyCanSave}
+                  >
+                    {historyBusy ? t.common.loading : t.accounts.historySave}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="wbtn"
+                onClick={() => setHistoryOpen(true)}
+                style={{ width: "100%" }}
+              >
+                {t.accounts.editBalanceHistory}
+              </button>
+            ))}
+
           {detail.data && (
             <div className="sketch-box p-16">
 	              <div className="row between mb-8">
@@ -440,17 +801,21 @@ export function AccountDetailModal({
 	                  <span className="mono-xs">{t.accounts.holdingsTitle}</span>
 	                  <span className="mono-xs">|</span>
 	                  <span className="mono-xs">{t.accounts.groupBy}</span>
-	                  <span
-	                    className={"pill" + (holdingsGroupBy === "chain" ? " active" : "")}
-	                    onClick={() => setHoldingsGroupBy("chain")}
-	                  >
-	                    {t.accounts.groupByChain}
-	                  </span>
-	                  <span
-	                    className={"pill" + (holdingsGroupBy === "assets" ? " active" : "")}
-	                    onClick={() => setHoldingsGroupBy("assets")}
-	                  >
-	                    {t.accounts.groupByAssets}
+	                  <span className="segmented">
+	                    <button
+	                      type="button"
+	                      className={holdingsGroupBy === "chain" ? "active" : ""}
+	                      onClick={() => setHoldingsGroupBy("chain")}
+	                    >
+	                      {primaryGroupByLabel}
+	                    </button>
+	                    <button
+	                      type="button"
+	                      className={holdingsGroupBy === "assets" ? "active" : ""}
+	                      onClick={() => setHoldingsGroupBy("assets")}
+	                    >
+	                      {t.accounts.groupByAssets}
+	                    </button>
 	                  </span>
 	                </div>
                 <div className="row" style={{ gap: 10, alignItems: "center" }}>
@@ -519,10 +884,11 @@ export function AccountDetailModal({
 	                    {holdingsGroupBy === "chain" &&
 	                      chainGroups.map((g) => {
 	                        const collapsed = collapsedChains.has(g.chain);
+	                        const chainLabel = accountBucketLabel(g.chain);
 	                        const headerHolding: Holding = {
 	                          kind: "tok",
-	                          sym: g.chain.slice(0, 3),
-	                          name: g.chain,
+	                          sym: chainLabel.slice(0, 3),
+	                          name: chainLabel,
 	                          proto: "—",
 	                          chain: g.chain,
 	                          amt: "",
@@ -554,7 +920,7 @@ export function AccountDetailModal({
 	                                >
 	                                  {collapsed ? "▸" : "▾"}
 	                                </span>
-	                                <b>{g.chain}</b>{" "}
+	                                <b>{chainLabel}</b>{" "}
 	                                <span className="chip" style={{ marginLeft: 6 }}>
 	                                  {g.holdings.length}
 	                                </span>
@@ -616,7 +982,7 @@ export function AccountDetailModal({
                                   color: "var(--ink-2)",
                                 }}
                               >
-                                {r.chain}
+                                {chainBadgeLabel(r.chain)}
                               </span>
                             </td>
                             <td className="num">{r.amt}</td>
@@ -703,7 +1069,7 @@ export function AccountDetailModal({
                                     color: "var(--ink-2)",
                                   }}
                                 >
-                                  {g.chain}
+                                  {chainBadgeLabel(g.chain)}
                                 </span>
                               </td>
                               <td className="num">—</td>
@@ -758,7 +1124,7 @@ export function AccountDetailModal({
                                           color: "var(--ink-2)",
                                         }}
                                       >
-                                        {r.chain}
+                                        {chainBadgeLabel(r.chain)}
                                       </span>
                                     </td>
                                     <td className="num">{r.amt}</td>

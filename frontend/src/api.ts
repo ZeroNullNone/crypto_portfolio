@@ -1,6 +1,7 @@
 import type {
   Account,
   AccountDetail,
+  AccountHistoryPointInput,
   AccountInput,
   AccountSnapshot,
   AuthConfig,
@@ -86,6 +87,18 @@ export const api = {
   getAccount: (id: string) => http<AccountDetail>(`/api/accounts/${id}`),
   accountSnapshots: (id: string) =>
     http<AccountSnapshot[]>(`/api/accounts/${id}/snapshots`),
+  createAccountSnapshot: (id: string, body: AccountHistoryPointInput) =>
+    http<AccountSnapshot>(`/api/accounts/${id}/snapshots`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateAccountSnapshot: (id: string, snapshotId: number, body: AccountHistoryPointInput) =>
+    http<AccountSnapshot>(`/api/accounts/${id}/snapshots/${snapshotId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteAccountSnapshot: (id: string, snapshotId: number) =>
+    http<void>(`/api/accounts/${id}/snapshots/${snapshotId}`, { method: "DELETE" }),
   createAccount: (body: AccountInput) =>
     http<Account>("/api/accounts", { method: "POST", body: JSON.stringify(body) }),
   updateAccount: (id: string, body: Partial<AccountInput>) =>

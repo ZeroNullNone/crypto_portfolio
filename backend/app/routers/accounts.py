@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,7 +11,14 @@ from sqlalchemy.orm import Session
 from .. import db_models as m
 from ..auth import current_user
 from ..db import get_db
-from ..models import Account, AccountCreate, AccountDetail, AccountSnapshot, AccountUpdate
+from ..models import (
+    Account,
+    AccountCreate,
+    AccountDetail,
+    AccountHistoryPointIn,
+    AccountSnapshot,
+    AccountUpdate,
+)
 from ..services import sync as sync_service
 from ..services.mappers import account_to_detail, account_to_model
 
@@ -22,6 +30,45 @@ def _get_owned(db: Session, user_id: str, account_id: str) -> m.AccountRow:
     if row is None or row.user_id != user_id:
         raise HTTPException(status_code=404, detail="Account not found")
     return row
+
+
+def _utc_naive(dt):
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _as_utc(dt):
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _get_editable_history_row(
+    db: Session,
+    user_id: str,
+    account_id: str,
+    snapshot_id: int,
+) -> m.AccountSnapshotHistoryRow:
+    _get_owned(db, user_id, account_id)
+    row = db.get(m.AccountSnapshotHistoryRow, snapshot_id)
+    if row is None or row.user_id != user_id or row.account_id != account_id:
+        raise HTTPException(status_code=404, detail="History point not found")
+    if row.provider != "manual":
+        raise HTTPException(status_code=403, detail="Synced history is read-only")
+    return row
+
+
+def _snapshot_out(row: m.AccountSnapshotHistoryRow) -> AccountSnapshot:
+    return AccountSnapshot(
+        id=row.id,
+        bal=float(row.bal or 0.0),
+        d=float(row.d or 0.0),
+        synced_at=_as_utc(row.synced_at),
+        provider=row.provider,
+        editable=row.provider == "manual",
+        holdings=row.holdings or [],
+    )
 
 
 UNASSIGNED = "unassigned"
@@ -102,17 +149,58 @@ def account_snapshots(
         .order_by(m.AccountSnapshotHistoryRow.synced_at.asc())
         .all()
     )
-    return [
-        AccountSnapshot(
-            id=row.id,
-            bal=float(row.bal or 0.0),
-            d=float(row.d or 0.0),
-            synced_at=row.synced_at,
-            provider=row.provider,
-            holdings=row.holdings or [],
-        )
-        for row in rows
-    ]
+    return [_snapshot_out(row) for row in rows]
+
+
+@router.post("/{account_id}/snapshots", response_model=AccountSnapshot, status_code=201)
+def create_account_snapshot(
+    account_id: str,
+    body: AccountHistoryPointIn,
+    user: m.UserRow = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AccountSnapshot:
+    _get_owned(db, user.id, account_id)
+    row = m.AccountSnapshotHistoryRow(
+        user_id=user.id,
+        account_id=account_id,
+        bal=round(body.bal, 2),
+        d=0.0,
+        synced_at=_utc_naive(body.synced_at),
+        provider="manual",
+        holdings=[],
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _snapshot_out(row)
+
+
+@router.patch("/{account_id}/snapshots/{snapshot_id}", response_model=AccountSnapshot)
+def update_account_snapshot(
+    account_id: str,
+    snapshot_id: int,
+    body: AccountHistoryPointIn,
+    user: m.UserRow = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AccountSnapshot:
+    row = _get_editable_history_row(db, user.id, account_id, snapshot_id)
+    row.bal = round(body.bal, 2)
+    row.synced_at = _utc_naive(body.synced_at)
+    db.commit()
+    db.refresh(row)
+    return _snapshot_out(row)
+
+
+@router.delete("/{account_id}/snapshots/{snapshot_id}", status_code=204)
+def delete_account_snapshot(
+    account_id: str,
+    snapshot_id: int,
+    user: m.UserRow = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    row = _get_editable_history_row(db, user.id, account_id, snapshot_id)
+    db.delete(row)
+    db.commit()
 
 
 @router.post("", response_model=Account, status_code=201)

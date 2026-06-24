@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { ChartPlaceholder, Delta, LineChart, Spark, StackedArea } from "../lib/charts";
 import { fmt$k } from "../lib/format";
@@ -32,17 +32,20 @@ export function Balance() {
     { k: "calendar" as const, l: t.balance.viewCalendar },
   ];
   const [range, setRange] = useState("30D");
-  const [view, setView] = useState<BalanceView>("heat");
+  const [view, setView] = useState<BalanceView>("line");
   const accounts = useApi(() => api.listAccounts(), [], "accounts:list");
   const history = useApi(
     () => api.balanceHistory(range),
     [range],
     `balance:history:${range}`,
   );
+  const allHistory = useApi(() => api.balanceHistory("ALL"), [], "balance:history:ALL");
+  const chartTotal = view === "calendar" ? (allHistory.data?.total ?? []) : (history.data?.total ?? []);
 
   const refreshAfterSync = () => {
     accounts.refetch();
     history.refetch();
+    allHistory.refetch();
   };
   const stackSeries = useMemo(
     () => toStackedSeries(history.data?.by_wallet),
@@ -111,15 +114,17 @@ export function Balance() {
 
         <div className="sketch-box p-16">
           <div className="row between mb-8">
-            <span className="mono-xs">{t.balance.totalRange(range)}</span>
+            <span className="mono-xs">
+              {view === "calendar" ? t.balance.dailyBalanceTitle : t.balance.totalRange(range)}
+            </span>
             <span className="tiny">
-              {t.balance.snapshots(history.data?.total.length ?? 0)}
+              {t.balance.snapshots(chartTotal.length)}
             </span>
           </div>
-          <div style={{ height: view === "calendar" ? 260 : 220 }}>
+          <div style={{ height: view === "calendar" ? 430 : 220 }}>
             <BalanceHistoryChart
               view={view}
-              total={history.data?.total ?? []}
+              total={chartTotal}
               stackSeries={stackSeries}
             />
           </div>
@@ -225,6 +230,72 @@ function heatColor(pct: number, maxAbs: number) {
     : `rgba(214, 73, 51, ${alpha.toFixed(2)})`;
 }
 
+function balanceCellColor(change: number, maxAbs: number) {
+  if (change === 0) return "rgba(251,251,250,0.75)";
+  const intensity = Math.min(Math.abs(change) / Math.max(maxAbs, 0.01), 1);
+  const alpha = 0.08 + intensity * 0.18;
+  return change > 0
+    ? `rgba(46, 139, 107, ${alpha.toFixed(2)})`
+    : `rgba(214, 73, 51, ${alpha.toFixed(2)})`;
+}
+
+function dateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function monthKey(d: Date): string {
+  return dateKey(d).slice(0, 7);
+}
+
+function parseMonthKey(key: string): Date {
+  const [year, month] = key.split("-").map(Number);
+  return new Date(year, month - 1, 1);
+}
+
+function shiftMonthKey(key: string, delta: number): string {
+  const d = parseMonthKey(key);
+  d.setMonth(d.getMonth() + delta);
+  return monthKey(d);
+}
+
+function fmtSignedUsd(v: number): string {
+  const sign = v >= 0 ? "+" : "-";
+  return sign + Math.abs(v).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function dailyBalanceRows(series: BalancePoint[]) {
+  const daily = new Map<string, { key: string; day: Date; balance: number; time: number }>();
+  for (const point of [...series].sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())) {
+    const d = new Date(point.t);
+    const time = d.getTime();
+    if (!Number.isFinite(time)) continue;
+    const key = dateKey(d);
+    daily.set(key, {
+      key,
+      day: new Date(d.getFullYear(), d.getMonth(), d.getDate()),
+      balance: point.v,
+      time,
+    });
+  }
+  return [...daily.values()]
+    .sort((a, b) => a.time - b.time)
+    .map((row, i, rows) => {
+      const prev = rows[i - 1]?.balance ?? row.balance;
+      const change = row.balance - prev;
+      return {
+        ...row,
+        change: Math.round(change * 100) / 100,
+        pct: prev > 0 ? (change / prev) * 100 : 0,
+      };
+    });
+}
+
 function BalanceHeatmap({ series }: { series: BalancePoint[] }) {
   const rows = balanceDeltas(series);
   const maxAbs = Math.max(...rows.map((r) => Math.abs(r.pct)), 0.01);
@@ -255,50 +326,174 @@ function BalanceHeatmap({ series }: { series: BalancePoint[] }) {
 }
 
 function BalanceCalendar({ series }: { series: BalancePoint[] }) {
-  const rows = balanceDeltas(series);
+  const t = useTranslation();
+  const rows = dailyBalanceRows(series);
+  const months = useMemo(() => {
+    const keys = [...new Set(rows.map((r) => monthKey(r.day)))];
+    return keys.sort();
+  }, [rows]);
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (months.length === 0) return;
+    if (!selectedMonth || !months.includes(selectedMonth)) {
+      setSelectedMonth(months[months.length - 1]);
+    }
+  }, [months, selectedMonth]);
+
   if (rows.length === 0) return <ChartPlaceholder />;
-  const byDay = new Map<string, (typeof rows)[number]>();
-  for (const r of rows) byDay.set(new Date(r.t).toISOString().slice(0, 10), r);
-  const first = new Date(rows[0].time);
-  const last = new Date(rows[rows.length - 1].time);
-  const start = new Date(first);
-  start.setDate(start.getDate() - start.getDay());
-  const days = Math.ceil((last.getTime() - start.getTime()) / 86400000) + 1;
-  const cells = Array.from({ length: Math.max(days, 7) }, (_, i) => {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const key = d.toISOString().slice(0, 10);
-    return { key, d, point: byDay.get(key) };
+
+  const activeMonth = selectedMonth ?? months[months.length - 1];
+  const monthStart = parseMonthKey(activeMonth);
+  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - monthStart.getDay());
+  const cellCount = Math.ceil((monthStart.getDay() + monthEnd.getDate()) / 7) * 7;
+  const byDay = new Map(rows.map((r) => [r.key, r]));
+  const cells = Array.from({ length: cellCount }, (_, i) => {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    return { key: dateKey(d), d, point: byDay.get(dateKey(d)) };
   });
-  const weeks = Math.ceil(cells.length / 7);
-  const maxAbs = Math.max(...rows.map((r) => Math.abs(r.pct)), 0.01);
+  const monthRows = rows.filter((r) => monthKey(r.day) === activeMonth);
+  const baseRow = [...rows].reverse().find((r) => r.day < monthStart);
+  const base = baseRow?.balance ?? monthRows[0]?.balance ?? 0;
+  const monthBalance = monthRows[monthRows.length - 1]?.balance ?? 0;
+  const monthChange = monthBalance - base;
+  const maxAbs = Math.max(...monthRows.map((r) => Math.abs(r.change)), 0.01);
+  const firstMonth = months[0];
+  const lastMonth = months[months.length - 1];
+  const canPrev = activeMonth > firstMonth;
+  const canNext = activeMonth < lastMonth;
+  const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: `repeat(${weeks}, minmax(18px, 1fr))`,
-        gridAutoFlow: "column",
-        gridTemplateRows: "repeat(7, minmax(18px, 1fr))",
-        gap: 4,
-        height: "100%",
-      }}
-    >
-      {cells.map((cell) => (
-        <div
-          key={cell.key}
-          title={
-            cell.point
-              ? `${cell.d.toLocaleDateString()} · ${fmt$k(cell.point.v)} · ${cell.point.pct >= 0 ? "+" : ""}${cell.point.pct.toFixed(2)}%`
-              : cell.d.toLocaleDateString()
-          }
-          style={{
-            border: "1px solid rgba(26,24,20,0.22)",
-            borderRadius: 3,
-            background: cell.point ? heatColor(cell.point.pct, maxAbs) : "rgba(26,24,20,0.04)",
-          }}
-        />
-      ))}
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div className="row between wrap" style={{ gap: 10 }}>
+        <div>
+          <div className="row" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className="wbtn"
+              disabled={!canPrev}
+              onClick={() => setSelectedMonth(shiftMonthKey(activeMonth, -1))}
+              aria-label={t.balance.prevMonth}
+              title={t.balance.prevMonth}
+              style={{ width: 30, height: 28, padding: 0, fontSize: 18, lineHeight: 1 }}
+            >
+              ‹
+            </button>
+            <span className="head" style={{ fontSize: 26, lineHeight: 1 }}>
+              {activeMonth}
+            </span>
+            <button
+              type="button"
+              className="wbtn"
+              disabled={!canNext}
+              onClick={() => setSelectedMonth(shiftMonthKey(activeMonth, 1))}
+              aria-label={t.balance.nextMonth}
+              title={t.balance.nextMonth}
+              style={{ width: 30, height: 28, padding: 0, fontSize: 18, lineHeight: 1 }}
+            >
+              ›
+            </button>
+          </div>
+        </div>
+        <div className="row wrap" style={{ gap: 28, alignItems: "flex-end" }}>
+          <div>
+            <span className="mono-xs">{t.balance.monthBalance}</span>
+            <span
+              style={{ display: "block", fontFamily: "var(--head)", fontSize: 24 }}
+            >
+              {fmt$k(monthBalance)}
+            </span>
+          </div>
+          <div>
+            <span className="mono-xs">{t.balance.monthChange}</span>
+            <span
+              className={monthChange >= 0 ? "accent-2" : "accent"}
+              style={{ display: "block", fontFamily: "var(--head)", fontSize: 24 }}
+            >
+              {fmtSignedUsd(monthChange)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+          gap: 8,
+          fontFamily: "var(--mono)",
+          fontSize: 12,
+          textAlign: "center",
+        }}
+      >
+        {weekdays.map((day, i) => (
+          <div key={`${day}-${i}`} style={{ color: "var(--ink)", paddingBottom: 2 }}>
+            {day}
+          </div>
+        ))}
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "grid",
+          gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+          gridAutoRows: "minmax(52px, 1fr)",
+          gap: 8,
+        }}
+      >
+        {cells.map((cell) => {
+          const inMonth = monthKey(cell.d) === activeMonth;
+          const change = cell.point?.change ?? 0;
+          return (
+            <div
+              key={cell.key}
+              title={
+                cell.point
+                  ? `${cell.d.toLocaleDateString()} · ${fmt$k(cell.point.balance)} · ${fmtSignedUsd(cell.point.change)} · ${cell.point.pct >= 0 ? "+" : "-"}${Math.abs(cell.point.pct).toFixed(2)}%`
+                  : cell.d.toLocaleDateString()
+              }
+              style={{
+                border: "1px solid rgba(26,24,20,0.12)",
+                borderRadius: 6,
+                background: cell.point && inMonth ? balanceCellColor(change, maxAbs) : "rgba(251,251,250,0.58)",
+                opacity: inMonth ? 1 : 0.34,
+                padding: "8px 6px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: cell.point ? "center" : "flex-start",
+                gap: 5,
+                overflow: "hidden",
+              }}
+            >
+              <div className="head" style={{ fontSize: 18, lineHeight: 1 }}>
+                {cell.d.getDate()}
+              </div>
+              {cell.point && inMonth && (
+                <div
+                  className={change >= 0 ? "accent-2" : "accent"}
+                  style={{
+                    fontFamily: "var(--mono)",
+                    fontSize: 12,
+                    whiteSpace: "nowrap",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {fmt$k(cell.point.balance)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

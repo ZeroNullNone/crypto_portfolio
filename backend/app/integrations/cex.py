@@ -195,6 +195,7 @@ def _fetch_binance_wallet_summary_assets(
             locked=0.0,
             unit_price=1.0,
             usd_value=balance,
+            chain="binance-summary",
         )
     return total_usd, assets, "binance /sapi/v1/asset/wallet/balance"
 
@@ -284,6 +285,54 @@ def _to_float(value: Any) -> float:
         return 0.0
 
 
+def _asset_unit_prices(assets: list[str]) -> dict[str, float]:
+    normalized = {asset.strip().upper() for asset in assets if asset}
+    prices = {asset: 1.0 for asset in normalized if _is_stable_asset(asset)}
+    symbols: list[str] = []
+    for asset in normalized:
+        if asset not in prices:
+            symbols.extend(_symbol_candidates(asset))
+    ticker_prices = _fetch_binance_prices(symbols)
+    for asset in normalized:
+        if asset in prices:
+            continue
+        for symbol in _symbol_candidates(asset):
+            if symbol in ticker_prices:
+                prices[asset] = ticker_prices[symbol]
+                break
+    return prices
+
+
+def _append_priced_asset_row(
+    assets: list[dict[str, Any]],
+    *,
+    name: str,
+    amount: float,
+    available: float,
+    locked: float,
+    chain: str,
+    prices: dict[str, float],
+    fallback_usd: float = 0.0,
+) -> None:
+    symbol = name.strip().upper()
+    if not symbol:
+        return
+    unit_price = _to_float(prices.get(symbol))
+    usd_value = amount * unit_price if unit_price > 0 else fallback_usd
+    if unit_price <= 0 and amount > 0 and fallback_usd > 0:
+        unit_price = fallback_usd / amount
+    _append_asset_row(
+        assets,
+        name=symbol,
+        amount=amount,
+        available=available,
+        locked=locked,
+        unit_price=unit_price,
+        usd_value=usd_value,
+        chain=chain,
+    )
+
+
 def _fetch_binance_spot_assets(creds: dict[str, str]) -> tuple[float, list[dict[str, Any]], str | None]:
     params = _binance_signed_params(
         creds["api_secret"],
@@ -337,6 +386,7 @@ def _fetch_binance_spot_assets(creds: dict[str, str]) -> tuple[float, list[dict[
             locked=item["locked"],
             unit_price=unit_price,
             usd_value=usd_value,
+            chain="binance-spot",
         )
     return total_usd, assets, "binance /api/v3/account"
 
@@ -417,6 +467,7 @@ def _fetch_binance_portfolio_margin_assets(
             locked=0.0,
             unit_price=unit_price,
             usd_value=usd_value,
+            chain="binance-portfolio",
         )
     return total_usd, assets, "binance /papi/v1/balance"
 
@@ -462,6 +513,7 @@ def _fetch_binance_futures_assets(
             locked=max((wallet_balance if wallet_balance > 0 else margin_balance) - available, 0.0),
             unit_price=1.0 if _is_stable_asset(asset) else 0.0,
             usd_value=usd_value,
+            chain="binance-usdm",
         )
 
     total_margin_balance = float(payload.get("totalMarginBalance", 0.0) or 0.0)
@@ -526,8 +578,174 @@ def _fetch_binance_coin_futures_assets(
             locked=max(amount - item["available"], 0.0),
             unit_price=unit_price,
             usd_value=usd_value,
+            chain="binance-coinm",
         )
     return total_usd, assets, "binance /dapi/v1/balance"
+
+
+def _fetch_binance_funding_assets(
+    creds: dict[str, str],
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    params = _binance_signed_params(
+        creds["api_secret"],
+        {
+            "needBtcValuation": "true",
+            "recvWindow": "5000",
+            "timestamp": str(_now_ms()),
+        },
+    )
+    payload = _request_json_allow_statuses(
+        "https://api.binance.com/sapi/v1/asset/get-funding-asset",
+        method="POST",
+        headers=_binance_headers(creds["api_key"]),
+        params=params,
+        allowed_statuses={401, 403},
+    )
+    if not isinstance(payload, list):
+        return 0.0, [], None
+
+    symbols: list[str] = []
+    raw_rows: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        asset = str(item.get("asset", "") or "").strip().upper()
+        if not asset:
+            continue
+        free = _to_float(item.get("free"))
+        locked = (
+            _to_float(item.get("locked"))
+            + _to_float(item.get("freeze"))
+            + _to_float(item.get("withdrawing"))
+        )
+        amount = free + locked
+        if amount <= 0:
+            continue
+        raw_rows.append(
+            {
+                "asset": asset,
+                "amount": amount,
+                "available": free,
+                "locked": locked,
+                "btc_value": _to_float(item.get("btcValuation")),
+            }
+        )
+        symbols.append(asset)
+
+    if not raw_rows:
+        return 0.0, [], None
+    prices = _asset_unit_prices(symbols + ["BTC"])
+    btc_price = _to_float(prices.get("BTC"))
+    assets: list[dict[str, Any]] = []
+    total_usd = 0.0
+    for row in raw_rows:
+        fallback_usd = row["btc_value"] * btc_price if btc_price > 0 else 0.0
+        _append_priced_asset_row(
+            assets,
+            name=row["asset"],
+            amount=row["amount"],
+            available=row["available"],
+            locked=row["locked"],
+            chain="binance-funding",
+            prices=prices,
+            fallback_usd=fallback_usd,
+        )
+        total_usd += _to_float(assets[-1].get("usd_value")) if assets else 0.0
+    return total_usd, assets, "binance /sapi/v1/asset/get-funding-asset"
+
+
+def _binance_simple_earn_rows(
+    creds: dict[str, str],
+    path: str,
+    *,
+    chain: str,
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    raw_rows: list[dict[str, Any]] = []
+    current = 1
+    while current <= 10:
+        params = _binance_signed_params(
+            creds["api_secret"],
+            {
+                "current": str(current),
+                "size": "100",
+                "recvWindow": "5000",
+                "timestamp": str(_now_ms()),
+            },
+        )
+        payload = _request_json_allow_statuses(
+            f"https://api.binance.com{path}",
+            headers=_binance_headers(creds["api_key"]),
+            params=params,
+            allowed_statuses={401, 403},
+        )
+        if not isinstance(payload, dict):
+            return 0.0, [], None
+        rows = payload.get("rows", [])
+        if not isinstance(rows, list) or not rows:
+            break
+        raw_rows.extend(row for row in rows if isinstance(row, dict))
+        total = int(_to_float(payload.get("total")))
+        if total <= current * 100:
+            break
+        current += 1
+
+    symbols: list[str] = []
+    parsed_rows: list[dict[str, Any]] = []
+    for item in raw_rows:
+        asset = str(item.get("asset", "") or "").strip().upper()
+        if not asset:
+            continue
+        amount = 0.0
+        for key in ("totalAmount", "amount", "redeemableAmount"):
+            amount = _to_float(item.get(key))
+            if amount > 0:
+                break
+        if amount <= 0:
+            continue
+        parsed_rows.append({"asset": asset, "amount": amount})
+        symbols.append(asset)
+
+    if not parsed_rows:
+        return 0.0, [], None
+    prices = _asset_unit_prices(symbols)
+    assets: list[dict[str, Any]] = []
+    total_usd = 0.0
+    for row in parsed_rows:
+        before = len(assets)
+        _append_priced_asset_row(
+            assets,
+            name=row["asset"],
+            amount=row["amount"],
+            available=row["amount"],
+            locked=0.0,
+            chain=chain,
+            prices=prices,
+        )
+        if len(assets) > before:
+            total_usd += _to_float(assets[-1].get("usd_value"))
+    return total_usd, assets, f"binance {path}"
+
+
+def _fetch_binance_simple_earn_assets(
+    creds: dict[str, str],
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    strategies: list[str] = []
+    assets: list[dict[str, Any]] = []
+    total_usd = 0.0
+    for path, chain in (
+        ("/sapi/v1/simple-earn/flexible/position", "binance-earn-flexible"),
+        ("/sapi/v1/simple-earn/locked/position", "binance-earn-locked"),
+    ):
+        part_total, part_assets, strategy = _binance_simple_earn_rows(
+            creds,
+            path,
+            chain=chain,
+        )
+        total_usd += part_total
+        assets.extend(part_assets)
+        if strategy:
+            strategies.append(strategy)
+    return total_usd, assets, " + ".join(strategies) if strategies else None
 
 
 def _binance_covered_wallets(strategies: list[str]) -> set[str]:
@@ -540,6 +758,10 @@ def _binance_covered_wallets(strategies: list[str]) -> set[str]:
         covered.add("COINM_FUTURES")
     if any("/papi/v1/balance" in strategy for strategy in strategies):
         covered.update({"MARGIN_CROSS", "USDM_FUTURES", "COINM_FUTURES"})
+    if any("/asset/get-funding-asset" in strategy for strategy in strategies):
+        covered.add("FUNDING")
+    if any("/simple-earn/" in strategy for strategy in strategies):
+        covered.add("EARN")
     return covered
 
 
@@ -581,6 +803,18 @@ def fetch_binance_assets(wallet: dict[str, Any]) -> dict[str, Any]:
             total_usd += coin_total
             assets.extend(coin_assets)
             strategies.append(coin_strategy)
+
+    funding_total, funding_assets, funding_strategy = _fetch_binance_funding_assets(creds)
+    if funding_strategy:
+        total_usd += funding_total
+        assets.extend(funding_assets)
+        strategies.append(funding_strategy)
+
+    earn_total, earn_assets, earn_strategy = _fetch_binance_simple_earn_assets(creds)
+    if earn_strategy:
+        total_usd += earn_total
+        assets.extend(earn_assets)
+        strategies.append(earn_strategy)
 
     if wallet_strategy and (wallet_total > 0 or not assets):
         covered_wallets = _binance_covered_wallets(strategies)
@@ -1294,12 +1528,17 @@ def _bybit_sign(secret: str, timestamp: str, api_key: str, recv_window: str, que
     ).hexdigest()
 
 
-def fetch_bybit_assets(wallet: dict[str, Any]) -> dict[str, Any]:
-    creds = _load_cex_credentials(wallet)
+def _bybit_request(
+    creds: dict[str, str],
+    request_path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    allow_failure: bool = False,
+) -> tuple[Any | None, str | None]:
     timestamp = str(_now_ms())
     recv_window = "5000"
-    request_path = "/v5/account/wallet-balance"
-    query_string = urllib.parse.urlencode({"accountType": "UNIFIED"})
+    filtered_params = {k: v for k, v in (params or {}).items() if v is not None}
+    query_string = urllib.parse.urlencode(filtered_params)
     headers = {
         "X-BAPI-API-KEY": creds["api_key"],
         "X-BAPI-TIMESTAMP": timestamp,
@@ -1309,22 +1548,60 @@ def fetch_bybit_assets(wallet: dict[str, Any]) -> dict[str, Any]:
         ),
         "Content-Type": "application/json",
     }
-    payload = _request_json(
-        f"https://api.bybit.com{request_path}",
-        headers=headers,
+    try:
+        payload = _request_json(
+            f"https://api.bybit.com{request_path}",
+            headers=headers,
+            params=filtered_params,
+        )
+    except urllib.error.HTTPError as exc:
+        detail = f"{request_path} HTTP {exc.code}: {exc.reason}"
+        if allow_failure:
+            return None, detail
+        raise RuntimeError(f"Bybit request failed for {detail}") from exc
+    except urllib.error.URLError as exc:
+        detail = f"{request_path} network error: {exc.reason}"
+        if allow_failure:
+            return None, detail
+        raise RuntimeError(f"Bybit request failed for {detail}") from exc
+
+    if not isinstance(payload, dict):
+        detail = f"{request_path} returned non-object response"
+        if allow_failure:
+            return None, detail
+        raise RuntimeError(f"Bybit request failed for {detail}")
+
+    code = str(payload.get("retCode", "") or "").strip()
+    if code and code != "0":
+        msg = str(payload.get("retMsg", "") or "unknown error").strip()
+        detail = f"{request_path} API error ({code}): {msg}"
+        if allow_failure:
+            return None, detail
+        raise RuntimeError(f"Bybit request failed for {detail}")
+    return payload.get("result"), None
+
+
+def _fetch_bybit_unified_assets(
+    creds: dict[str, str],
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    result, _ = _bybit_request(
+        creds,
+        "/v5/account/wallet-balance",
         params={"accountType": "UNIFIED"},
+        allow_failure=True,
     )
-    result = payload.get("result", {}) if isinstance(payload, dict) else {}
+    if not isinstance(result, dict):
+        return 0.0, [], None
     account_list = result.get("list", []) if isinstance(result, dict) else []
     account = account_list[0] if account_list and isinstance(account_list[0], dict) else {}
     raw_assets = account.get("coin", []) if isinstance(account, dict) else []
-    total_usd = float(account.get("totalEquity", 0.0) or 0.0)
-    assets = []
+    total_usd = _to_float(account.get("totalEquity"))
+    assets: list[dict[str, Any]] = []
     for item in raw_assets:
         if not isinstance(item, dict):
             continue
-        amount = float(item.get("equity", item.get("walletBalance", 0.0)) or 0.0)
-        usd_value = float(item.get("usdValue", 0.0) or 0.0)
+        amount = _to_float(item.get("equity", item.get("walletBalance")))
+        usd_value = _to_float(item.get("usdValue"))
         if amount <= 0 and usd_value <= 0:
             continue
         assets.append(
@@ -1333,16 +1610,147 @@ def fetch_bybit_assets(wallet: dict[str, Any]) -> dict[str, Any]:
                 "symbol": str(item.get("coin", "") or "").upper(),
                 "chain": "bybit",
                 "amount": amount,
-                "available": float(item.get("walletBalance", 0.0) or 0.0),
-                "locked": float(item.get("locked", 0.0) or 0.0),
+                "available": _to_float(item.get("walletBalance")),
+                "locked": _to_float(item.get("locked")),
                 "unit_price": usd_value / amount if amount > 0 else 0.0,
                 "usd_value": usd_value,
             }
         )
+    return total_usd, assets, "bybit /v5/account/wallet-balance"
+
+
+def _bybit_label_key(*labels: str) -> str:
+    raw = "_".join(label for label in labels if label)
+    normalized = unicodedata.normalize("NFKD", raw)
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    key = "".join(ch if ch.isalnum() else "_" for ch in ascii_name.upper()).strip("_")
+    return "_".join(part for part in key.split("_") if part) or "ACCOUNT"
+
+
+def _bybit_chain(*labels: str) -> str:
+    return f"bybit-{_bybit_label_key(*labels).lower().replace('_', '-')}"
+
+
+def _fetch_bybit_asset_overview_assets(
+    creds: dict[str, str],
+    *,
+    skip_unified: bool,
+) -> tuple[float, list[dict[str, Any]], str | None]:
+    result, _ = _bybit_request(
+        creds,
+        "/v5/asset/asset-overview",
+        params={"valuationCurrency": "USD"},
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError("Bybit asset overview returned malformed result")
+
+    total_usd = _to_float(result.get("totalEquity"))
+    raw_rows: list[dict[str, Any]] = []
+    fallback_rows: list[dict[str, Any]] = []
+    symbols: list[str] = []
+    def add_coin_rows(
+        coin_details: Any,
+        *,
+        chain: str,
+        fallback_total: float,
+    ) -> bool:
+        if not isinstance(coin_details, list) or not coin_details:
+            return False
+        rows = [row for row in coin_details if isinstance(row, dict)]
+        for row in rows:
+            coin = str(row.get("coin", "") or "").strip().upper()
+            amount = _to_float(row.get("equity"))
+            if not coin or amount <= 0:
+                continue
+            raw_rows.append(
+                {
+                    "coin": coin,
+                    "amount": amount,
+                    "chain": chain,
+                    "fallback_usd": fallback_total if len(rows) == 1 else 0.0,
+                }
+            )
+            symbols.append(coin)
+        return True
+
+    assets: list[dict[str, Any]] = []
+    for account in result.get("list", []):
+        if not isinstance(account, dict):
+            continue
+        account_type = str(account.get("accountType", "") or "").strip()
+        account_key = _bybit_label_key(account_type)
+        if skip_unified and account_key in {"UNIFIEDTRADINGACCOUNT", "UNIFIED"}:
+            continue
+        categories = account.get("categories")
+        if isinstance(categories, list) and categories:
+            for category in categories:
+                if not isinstance(category, dict):
+                    continue
+                category_name = str(category.get("category", "") or "").strip()
+                equity = _to_float(category.get("equity"))
+                chain = _bybit_chain(account_type, category_name)
+                if not add_coin_rows(
+                    category.get("coinDetail"),
+                    chain=chain,
+                    fallback_total=equity,
+                ):
+                    fallback_rows.append(
+                        {
+                            "name": f"BYBIT_{_bybit_label_key(account_type, category_name)}",
+                            "equity": equity,
+                            "chain": chain,
+                        }
+                    )
+            continue
+        equity = _to_float(account.get("totalEquity"))
+        chain = _bybit_chain(account_type)
+        if not add_coin_rows(account.get("coinDetail"), chain=chain, fallback_total=equity):
+            fallback_rows.append(
+                {
+                    "name": f"BYBIT_{account_key}",
+                    "equity": equity,
+                    "chain": chain,
+                }
+            )
+
+    prices = _asset_unit_prices(symbols)
+    for row in raw_rows:
+        _append_priced_asset_row(
+            assets,
+            name=row["coin"],
+            amount=row["amount"],
+            available=row["amount"],
+            locked=0.0,
+            chain=row["chain"],
+            prices=prices,
+            fallback_usd=row["fallback_usd"],
+        )
+    for row in fallback_rows:
+        _append_asset_row(
+            assets,
+            name=row["name"],
+            amount=row["equity"],
+            available=row["equity"],
+            locked=0.0,
+            unit_price=1.0,
+            usd_value=row["equity"],
+            chain=row["chain"],
+        )
+    return total_usd, assets, "bybit /v5/asset/asset-overview"
+
+
+def fetch_bybit_assets(wallet: dict[str, Any]) -> dict[str, Any]:
+    creds = _load_cex_credentials(wallet)
+    _, unified_assets, unified_strategy = _fetch_bybit_unified_assets(creds)
+    overview_total, overview_assets, overview_strategy = _fetch_bybit_asset_overview_assets(
+        creds,
+        skip_unified=bool(unified_assets),
+    )
+    strategies = [strategy for strategy in (unified_strategy, overview_strategy) if strategy]
     return {
-        "balance": total_usd,
-        "assets": assets,
-        "fetch_strategy": f"bybit /v5/account/wallet-balance via {creds['prefix']}_*",
+        "balance": overview_total,
+        "assets": unified_assets + overview_assets,
+        "fetch_strategy": f"{' + '.join(strategies)} via {creds['prefix']}_*",
     }
 
 

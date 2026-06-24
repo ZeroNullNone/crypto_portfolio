@@ -691,18 +691,17 @@ def _build_cex_positions(
 def _build_cex_holdings(
     assets: list[dict[str, Any]], exchange: str
 ) -> list[dict[str, Any]]:
-    """Merge the CEX integration's per-wallet asset rows into the Holding shape
-    the UI renders. Multiple rows for the same symbol (e.g. spot + funding +
-    PM for a single coin) are summed so the UI shows one line per asset."""
-    merged: dict[str, dict[str, float]] = {}
+    """Merge CEX rows into the Holding shape while preserving wallet buckets."""
+    merged: dict[tuple[str, str], dict[str, float]] = {}
     for a in assets or []:
         sym = str(a.get("symbol") or a.get("name") or "").upper()
         if not sym:
             continue
+        chain = str(a.get("chain") or exchange).lower()
         amount = float(a.get("amount", 0.0) or 0.0)
         price = float(a.get("unit_price", 0.0) or 0.0)
         usd = float(a.get("usd_value") or amount * price)
-        cur = merged.setdefault(sym, {"amount": 0.0, "usd": 0.0, "price": 0.0})
+        cur = merged.setdefault((sym, chain), {"amount": 0.0, "usd": 0.0, "price": 0.0})
         cur["amount"] += amount
         cur["usd"] += usd
         # Keep any positive unit price we saw — CEX rows mix priced and
@@ -710,7 +709,7 @@ def _build_cex_holdings(
         if price > 0 and cur["price"] <= 0:
             cur["price"] = price
     out: list[dict[str, Any]] = []
-    for sym, v in merged.items():
+    for (sym, chain), v in merged.items():
         amount = v["amount"]
         usd = v["usd"]
         price = v["price"] or (usd / amount if amount > 0 and usd > 0 else 0.0)
@@ -721,7 +720,7 @@ def _build_cex_holdings(
             "sym": sym,
             "name": sym,
             "proto": "—",
-            "chain": exchange,
+            "chain": chain,
             "amt": _fmt_amount(amount),
             "price": _fmt_price(price),
             "usd": round(usd, 2),

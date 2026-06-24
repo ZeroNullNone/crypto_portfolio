@@ -137,7 +137,13 @@ class AccountSnapshot(BaseModel):
     d: float
     synced_at: datetime
     provider: str
+    editable: bool = False
     holdings: list[Holding] = []
+
+
+class AccountHistoryPointIn(BaseModel):
+    bal: float = Field(ge=0.0, le=1e18, allow_inf_nan=False)
+    synced_at: datetime
 
 
 # ── Groups ───────────────────────────────────────────────────────────────

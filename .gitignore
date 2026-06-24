@@ -27,3 +27,4 @@ pnpm-debug.log*
 dist/
 build/
 .vite/
+.DS_Store
