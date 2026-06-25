@@ -96,6 +96,8 @@ export interface TopAsset {
 
 export interface DashboardSummary {
   total: number;
+  total_myr?: number | null;
+  usd_myr_rate?: number | null;
   change_24h_usd: number;
   change_24h_pct: number;
   change_7d_pct: number;

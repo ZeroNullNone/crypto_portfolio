@@ -179,6 +179,8 @@ class TopAsset(BaseModel):
 
 class DashboardSummary(BaseModel):
     total: float
+    total_myr: Optional[float] = None
+    usd_myr_rate: Optional[float] = None
     change_24h_usd: float
     change_24h_pct: float
     change_7d_pct: float

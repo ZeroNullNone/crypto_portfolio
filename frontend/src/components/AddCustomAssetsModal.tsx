@@ -151,40 +151,29 @@ export function AddCustomAssetsModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 60,
-        background: "rgba(26,24,20,0.35)",
-        backdropFilter: "blur(2px)",
-        WebkitBackdropFilter: "blur(2px)",
-        overflowY: "auto",
-        display: "flex",
-        justifyContent: "center",
-        padding: "40px 20px",
-      }}
+      aria-label={t.addAssets.title(account.name)}
+      className="modal-overlay"
+      style={{ zIndex: "var(--z-modal-raised)" }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="sketch-box thick p-16"
+        className="sketch-box thick p-16 modal-card"
         style={{
-          width: "100%",
           maxWidth: 520,
-          margin: "auto",
-          background: "#fbfbfa",
-          boxShadow: "10px 10px 0 rgba(26,24,20,0.12)",
         }}
       >
         <div className="row between mb-12">
           <span className="head" style={{ fontSize: 20 }}>
             {t.addAssets.title(account.name)}
           </span>
-          <span
+          <button
+            type="button"
             onClick={onClose}
-            style={{ cursor: "pointer", fontSize: 18, color: "var(--muted)" }}
+            aria-label={t.common.close}
+            className="icon-close"
           >
             ✕
-          </span>
+          </button>
         </div>
 
         <div className="tiny mb-8" style={{ color: "var(--muted)" }}>

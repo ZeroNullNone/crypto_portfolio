@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { api } from "../api";
 import { useAuth } from "../auth/AuthContext";
 import { BarList, ChartPlaceholder, Delta, LineChart, StackedArea } from "../lib/charts";
-import { fmt$, fmt$k, sourceLabel } from "../lib/format";
+import { fmt$, fmt$k, sensitiveDigits, sourceLabel } from "../lib/format";
 import { useApi } from "../hooks/useApi";
 import { usePreferences } from "../hooks/usePreferences";
 import { SYNC_ALL_CONFIRM, SyncButton } from "../components/SyncButton";
@@ -27,6 +27,8 @@ const CHART_RANGES = [
   { k: "365D", l: "1y" },
   { k: "YTD", l: "ytd" },
 ] as const;
+const fmtMYR = (n: number): string =>
+  sensitiveDigits("MYR " + n.toLocaleString("en-US", { maximumFractionDigits: 0 }));
 const STACK_COLORS = [
   "#1a1814",
   "#d64933",
@@ -75,6 +77,8 @@ export function Dashboard() {
   const allCashflow = useApi(() => api.cashflow("ALL"), [], "cashflow:ALL");
 
   const total = summary.data?.total ?? 0;
+  const totalMyr = summary.data?.total_myr;
+  const usdMyrRate = summary.data?.usd_myr_rate;
   const lastSync = summary.data?.last_sync_at
     ? new Date(summary.data.last_sync_at).toLocaleString()
     : null;
@@ -212,8 +216,26 @@ export function Dashboard() {
           <div className="row between">
             <div>
               <div className="mono-xs">{t.dashboard.net}</div>
-              <div className="head" style={{ fontSize: 44, lineHeight: 1 }}>
-                {fmt$(total)}
+              <div
+                className="row"
+                style={{ gap: 10, alignItems: "baseline", flexWrap: "wrap" }}
+              >
+                <div className="head" style={{ fontSize: 44, lineHeight: 1 }}>
+                  {fmt$(total)}
+                </div>
+                {totalMyr != null && (
+                  <div
+                    className="mono-xs muted"
+                    title={
+                      usdMyrRate != null
+                        ? `BNM lowest USD/MYR intraday rate ${usdMyrRate.toFixed(4)}`
+                        : undefined
+                    }
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {fmtMYR(totalMyr)}
+                  </div>
+                )}
               </div>
             </div>
             <div
@@ -717,27 +739,14 @@ function PortfolioChartModal({
       aria-modal="true"
       aria-label={title}
       onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 9998,
-        backgroundColor: "rgba(26,24,20,0.55)",
-        backdropFilter: "blur(8px) saturate(80%)",
-        WebkitBackdropFilter: "blur(8px) saturate(80%)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
+      className="modal-overlay strong center"
     >
       <div
-        className="sketch-box thick p-16"
+        className="sketch-box thick p-16 modal-card strong"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "min(1120px, 96vw)",
           height: "min(720px, 86vh)",
-          background: "#fbfbfa",
-          boxShadow: "10px 10px 0 rgba(26,24,20,0.25)",
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -750,15 +759,7 @@ function PortfolioChartModal({
             onClick={onClose}
             aria-label={t.common.close}
             title={t.common.close}
-            style={{
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontSize: 20,
-              color: "var(--muted)",
-              padding: 4,
-              lineHeight: 1,
-            }}
+            className="icon-close"
           >
             ✕
           </button>

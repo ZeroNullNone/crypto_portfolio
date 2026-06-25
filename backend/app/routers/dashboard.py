@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .. import db_models as m
 from ..auth import current_user
 from ..db import get_db
+from ..integrations.bnm import BnmRateUnavailable, fetch_lowest_usd_myr_rate
 from ..models import DashboardSummary, TopAsset
 from ..services.sync import holding_key
 
@@ -79,8 +80,16 @@ def summary(
     )
     now = _utc_now_naive()
     cutoff_24h = now - timedelta(days=1)
+    usd_myr_rate = None
+    if total > 0:
+        try:
+            usd_myr_rate = fetch_lowest_usd_myr_rate(timeout=2.0)
+        except BnmRateUnavailable:
+            pass
     return DashboardSummary(
         total=round(total, 2),
+        total_myr=round(total * usd_myr_rate, 2) if usd_myr_rate else None,
+        usd_myr_rate=usd_myr_rate,
         change_24h_usd=_usd_since(db, user.id, total, cutoff_24h),
         change_24h_pct=_pct_since(db, user.id, total, cutoff_24h),
         change_7d_pct=_pct_since(db, user.id, total, now - timedelta(days=7)),

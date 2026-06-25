@@ -2,11 +2,21 @@
 :root {
   --paper: #f4f4f2;
   --paper-2: #eaeae8;
+  --surface: #fbfbfa;
   --ink: #1a1814;
   --ink-2: #3d3830;
   --muted: #8a8376;
   --line: #1a1814;
   --line-soft: rgba(26, 24, 20, 0.25);
+  --overlay-soft: rgba(26, 24, 20, 0.35);
+  --overlay-strong: rgba(26, 24, 20, 0.55);
+  --shadow-modal: 10px 10px 0 rgba(26, 24, 20, 0.12);
+  --shadow-modal-strong: 10px 10px 0 rgba(26, 24, 20, 0.25);
+  --z-dropdown: 30;
+  --z-modal: 50;
+  --z-modal-raised: 60;
+  --z-modal-top: 90;
+  --z-tooltip: 100;
   --accent: #d64933;
   --accent-2: #2e8b6b;
   --yellow: #f2c14e;
@@ -362,6 +372,49 @@ table.sk tbody tr.clickable:hover {
 .wbtn.primary:hover:not(:disabled) { background: #000; }
 .wbtn.accent { border-color: var(--accent); color: var(--accent); }
 .wbtn:disabled { cursor: not-allowed; opacity: 0.65; }
+
+/* Modal shell */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--overlay-soft);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px;
+}
+.modal-overlay.strong {
+  z-index: var(--z-modal-top);
+  background: var(--overlay-strong);
+  backdrop-filter: blur(8px) saturate(80%);
+  -webkit-backdrop-filter: blur(8px) saturate(80%);
+  align-items: flex-start;
+  font-family: var(--head);
+  isolation: isolate;
+}
+.modal-overlay.center {
+  align-items: center;
+  padding: 20px;
+}
+.modal-card {
+  width: 100%;
+  margin: auto;
+  background: var(--surface);
+  box-shadow: var(--shadow-modal);
+}
+.modal-card.strong { box-shadow: var(--shadow-modal-strong); }
+.icon-close {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--muted);
+  padding: 4px;
+  line-height: 1;
+}
 
 /* Accounts tree — unselected rows get a soft hover highlight so users can
    see which one they're about to click on. */

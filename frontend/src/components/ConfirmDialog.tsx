@@ -38,35 +38,16 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 9999,
-        backgroundColor: "rgba(26,24,20,0.55)",
-        backdropFilter: "blur(8px) saturate(80%)",
-        WebkitBackdropFilter: "blur(8px) saturate(80%)",
-        overflowY: "auto",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "flex-start",
-        padding: "40px 20px",
-        fontFamily: "var(--head)",
-        // Force its own stacking context, independent of whatever ancestor
-        // we rendered in before the portal.
-        isolation: "isolate",
-      }}
+      className="modal-overlay strong"
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className="modal-card strong"
         style={{
-          width: "100%",
           maxWidth: 420,
-          margin: "auto",
-          backgroundColor: "#fbfbfa",
           border: "2.5px solid var(--line)",
           borderRadius: 6,
           padding: 16,
-          boxShadow: "10px 10px 0 rgba(26,24,20,0.25)",
           fontFamily: "var(--head)",
           color: "var(--ink)",
           position: "relative",
@@ -96,15 +77,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onCancel}
             aria-label="Close"
-            style={{
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              fontSize: 18,
-              color: "var(--muted)",
-              padding: 4,
-              lineHeight: 1,
-            }}
+            className="icon-close"
           >
             ✕
           </button>
