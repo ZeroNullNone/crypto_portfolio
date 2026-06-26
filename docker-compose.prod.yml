@@ -1,0 +1,44 @@
+services:
+  backend:
+    build: ./backend
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      - CORS_ORIGINS=${PORTFOLIO_ORIGIN:?set PORTFOLIO_ORIGIN=https://cp.terminallab.dev in .env}
+      - PORTFOLIO_DB_PATH=/app/data/portfolio.db
+      - SESSION_COOKIE_SECURE=true
+    expose:
+      - "8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  auto-sync:
+    build: ./backend
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    command: ["python", "-m", "app.jobs.auto_sync_loop"]
+    env_file:
+      - .env
+    environment:
+      - PORTFOLIO_DB_PATH=/app/data/portfolio.db
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PORTFOLIO_HOST_PORT:-8081}:80"
+    restart: unless-stopped
