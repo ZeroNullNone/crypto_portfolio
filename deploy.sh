@@ -9,7 +9,7 @@ fi
 
 mkdir -p data
 if [ -f data/portfolio.db ]; then
-  backup_dir="${BACKUP_DIR:-/srv/backups/crypto_portfolio}"
+  backup_dir="${BACKUP_DIR:-/backups/crypto_portfolio}"
   mkdir -p "$backup_dir"
   cp data/portfolio.db "$backup_dir/portfolio-$(date +%Y%m%d-%H%M%S).db"
 fi
