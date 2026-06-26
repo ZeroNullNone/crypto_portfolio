@@ -401,14 +401,6 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
         </div>
         <div className="row wrap" style={{ gap: 28, alignItems: "flex-end" }}>
           <div>
-            <span className="mono-xs">{t.balance.monthBalance}</span>
-            <span
-              style={{ display: "block", fontFamily: "var(--head)", fontSize: 24 }}
-            >
-              {fmt$k(monthBalance)}
-            </span>
-          </div>
-          <div>
             <span className="mono-xs">{t.balance.monthChange}</span>
             <span
               className={monthChange >= 0 ? "accent-2" : "accent"}
@@ -455,7 +447,7 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
               key={cell.key}
               title={
                 cell.point
-                  ? `${cell.d.toLocaleDateString()} · ${fmt$k(cell.point.balance)} · ${fmtSignedUsd(cell.point.change)} · ${cell.point.pct >= 0 ? "+" : "-"}${Math.abs(cell.point.pct).toFixed(2)}%`
+                  ? `${cell.d.toLocaleDateString()} · ${fmtSignedUsd(cell.point.change)} · ${cell.point.pct >= 0 ? "+" : "-"}${Math.abs(cell.point.pct).toFixed(2)}%`
                   : cell.d.toLocaleDateString()
               }
               style={{
@@ -487,7 +479,7 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
                     textOverflow: "ellipsis",
                   }}
                 >
-                  {fmt$k(cell.point.balance)}
+                  {fmtSignedUsd(change)}
                 </div>
               )}
             </div>
