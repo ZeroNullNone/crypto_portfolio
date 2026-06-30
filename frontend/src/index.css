@@ -1157,3 +1157,221 @@ table.sk tbody tr.clickable:hover {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+/* ── Authenticated app responsiveness ───────────────────────── */
+input,
+select,
+textarea {
+  max-width: 100%;
+  font: inherit;
+}
+
+.row > *,
+.grid > * {
+  min-width: 0;
+}
+
+.dashboard-layout {
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr);
+}
+
+.accounts-layout {
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+}
+
+.portfolio-total {
+  font-size: 44px;
+  line-height: 1;
+}
+
+.sketch-box:has(> table.sk) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+table.sk {
+  min-width: 760px;
+}
+
+@media (max-width: 980px) {
+  .dashboard-layout,
+  .accounts-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  .g-3,
+  .g-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .nav-inner {
+    padding: 8px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .logo {
+    font-size: 19px;
+  }
+
+  .nav-tabs {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+    padding: 2px 0 6px;
+    scrollbar-width: none;
+  }
+
+  .nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-tab {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .nav-right {
+    gap: 6px;
+  }
+
+  .page {
+    padding: 10px 10px 24px;
+    margin-bottom: 20px;
+  }
+
+  .sheet {
+    padding: 14px;
+    border-radius: 8px;
+    box-shadow: 2px 2px 0 var(--line);
+  }
+
+  .sheet-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .sheet-head h2 {
+    font-size: 24px;
+  }
+
+  .sheet-head > .row,
+  .sheet .row.between,
+  .sketch-box > .row.between {
+    flex-wrap: wrap;
+  }
+
+  .g-2,
+  .g-3,
+  .g-4 {
+    grid-template-columns: 1fr !important;
+  }
+
+  .sheet .winput {
+    width: 100% !important;
+  }
+
+  .segmented {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .segmented button,
+  .pill,
+  .wbtn {
+    white-space: nowrap;
+  }
+
+  .portfolio-total {
+    font-size: 34px;
+  }
+
+  .kpi {
+    min-height: 78px;
+  }
+
+  .kpi .v {
+    font-size: 30px;
+  }
+
+  .modal-overlay {
+    padding: 16px 10px;
+  }
+
+  .modal-overlay.center {
+    align-items: flex-start;
+  }
+
+  .modal-card {
+    max-width: 100% !important;
+  }
+
+  .first-run-card {
+    padding: 22px 18px 20px;
+  }
+}
+
+@media (max-width: 560px) {
+  .nav-inner {
+    padding-inline: 8px;
+  }
+
+  .privacy-toggle {
+    width: 30px;
+    height: 30px;
+  }
+
+  .page {
+    padding-inline: 8px;
+  }
+
+  .sheet {
+    padding: 12px;
+  }
+
+  .sheet-head h2 {
+    font-size: 22px;
+  }
+
+  .wbtn {
+    padding: 6px 10px;
+  }
+
+  table.sk {
+    min-width: 680px;
+    font-size: 11px;
+  }
+
+  table.sk th,
+  table.sk td {
+    padding: 7px 8px;
+  }
+
+  .landing .mock-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .sheet .row:not(.account-row) {
+    flex-wrap: wrap;
+  }
+
+  .pill,
+  .wbtn {
+    flex-shrink: 0;
+  }
+
+  .sheet .row > .wbtn,
+  .sheet .row > .pill {
+    max-width: 100%;
+  }
+}

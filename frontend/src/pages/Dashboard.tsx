@@ -204,9 +204,8 @@ export function Dashboard() {
       </div>
 
       <div
-        className="grid"
+        className="grid dashboard-layout"
         style={{
-          gridTemplateColumns: "1.3fr 1fr",
           gap: 10,
           fontFamily: "var(--mono)",
           fontSize: 11,
@@ -220,7 +219,7 @@ export function Dashboard() {
                 className="row"
                 style={{ gap: 10, alignItems: "baseline", flexWrap: "wrap" }}
               >
-                <div className="head" style={{ fontSize: 44, lineHeight: 1 }}>
+                <div className="head portfolio-total">
                   {fmt$(total)}
                 </div>
                 {totalMyr != null && (

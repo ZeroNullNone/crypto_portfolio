@@ -1009,7 +1009,7 @@ export function Accounts() {
             )}
           </div>
 
-          <div className="grid" style={{ gridTemplateColumns: "300px 1fr", gap: 12 }}>
+          <div className="grid accounts-layout" style={{ gap: 12 }}>
             <div className="sketch-box p-12">
               <div className="row between mb-8" style={{ gap: 6 }}>
                 <span className="mono-xs">
