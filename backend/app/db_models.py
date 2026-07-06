@@ -79,6 +79,7 @@ class AccountRow(Base):
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)  # onchain|exchange|custom
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")  # active|inactive
     addr: Mapped[str] = mapped_column(String, nullable=False, default="")
     group_name: Mapped[str] = mapped_column(String, nullable=False, default="common")
     bal: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

@@ -362,6 +362,7 @@ export function EditAccountPanel({
 
   async function remove() {
     if (!account?.id || !confirm(t.editAcct.confirmDelete(account.name))) return;
+    if (!confirm(t.editAcct.confirmDeleteFinal(account.name))) return;
     setBusy(true);
     try {
       await api.deleteAccount(account.id);

@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from .. import db_models as m
@@ -24,25 +24,33 @@ from ..services.mappers import account_to_detail, account_to_model
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
-
 def _get_owned(db: Session, user_id: str, account_id: str) -> m.AccountRow:
     row = db.get(m.AccountRow, account_id)
     if row is None or row.user_id != user_id:
         raise HTTPException(status_code=404, detail="Account not found")
     return row
 
-
 def _utc_naive(dt):
     if dt.tzinfo is not None:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
-
 
 def _as_utc(dt):
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
+def _record_active_total_snapshot(db: Session, user_id: str) -> None:
+    total = round(
+        sum(
+            a.bal
+            for a in db.query(m.AccountRow)
+            .filter(m.AccountRow.user_id == user_id, m.AccountRow.status == "active")
+            .all()
+        ),
+        2,
+    )
+    db.add(m.TotalSnapshotRow(user_id=user_id, t=datetime.now(timezone.utc), v=total))
 
 def _get_editable_history_row(
     db: Session,
@@ -58,7 +66,6 @@ def _get_editable_history_row(
         raise HTTPException(status_code=403, detail="Synced history is read-only")
     return row
 
-
 def _snapshot_out(row: m.AccountSnapshotHistoryRow) -> AccountSnapshot:
     return AccountSnapshot(
         id=row.id,
@@ -70,9 +77,7 @@ def _snapshot_out(row: m.AccountSnapshotHistoryRow) -> AccountSnapshot:
         holdings=row.holdings or [],
     )
 
-
 UNASSIGNED = "unassigned"
-
 
 def _ensure_name_available(
     db: Session, user_id: str, name: str, *, exclude_id: Optional[str] = None
@@ -87,7 +92,6 @@ def _ensure_name_available(
             status_code=409,
             detail=f"You already have an account named '{name}'.",
         )
-
 
 def _resolve_group(db: Session, user_id: str, name: str) -> str:
     """Normalize the account's group. Empty/whitespace (or the literal
@@ -108,11 +112,11 @@ def _resolve_group(db: Session, user_id: str, name: str) -> str:
         )
     return key
 
-
 @router.get("", response_model=list[Account])
 def list_accounts(
     source: Optional[str] = None,
     group: Optional[str] = None,
+    status: str = Query("active", pattern="^(active|inactive|all)$"),
     user: m.UserRow = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[Account]:
@@ -121,8 +125,9 @@ def list_accounts(
         q = q.filter(m.AccountRow.source == source)
     if group:
         q = q.filter(m.AccountRow.group_name == group)
+    if status != "all":
+        q = q.filter(m.AccountRow.status == status)
     return [account_to_model(r) for r in q.all()]
-
 
 @router.get("/{account_id}", response_model=AccountDetail)
 def get_account(
@@ -131,7 +136,6 @@ def get_account(
     db: Session = Depends(get_db),
 ) -> AccountDetail:
     return account_to_detail(_get_owned(db, user.id, account_id))
-
 
 @router.get("/{account_id}/snapshots", response_model=list[AccountSnapshot])
 def account_snapshots(
@@ -150,7 +154,6 @@ def account_snapshots(
         .all()
     )
     return [_snapshot_out(row) for row in rows]
-
 
 @router.post("/{account_id}/snapshots", response_model=AccountSnapshot, status_code=201)
 def create_account_snapshot(
@@ -174,7 +177,6 @@ def create_account_snapshot(
     db.refresh(row)
     return _snapshot_out(row)
 
-
 @router.patch("/{account_id}/snapshots/{snapshot_id}", response_model=AccountSnapshot)
 def update_account_snapshot(
     account_id: str,
@@ -190,7 +192,6 @@ def update_account_snapshot(
     db.refresh(row)
     return _snapshot_out(row)
 
-
 @router.delete("/{account_id}/snapshots/{snapshot_id}", status_code=204)
 def delete_account_snapshot(
     account_id: str,
@@ -201,7 +202,6 @@ def delete_account_snapshot(
     row = _get_editable_history_row(db, user.id, account_id, snapshot_id)
     db.delete(row)
     db.commit()
-
 
 @router.post("", response_model=Account, status_code=201)
 def create_account(
@@ -216,6 +216,7 @@ def create_account(
         user_id=user.id,
         name=body.name,
         source=body.source,
+        status=body.status,
         addr=body.addr,
         group_name=group_name,
         chain=body.chain,
@@ -231,9 +232,7 @@ def create_account(
     db.refresh(row)
     return account_to_model(row)
 
-
 _SYNC_RELEVANT_FIELDS = ("source", "addr", "chain")
-
 
 @router.patch("/{account_id}", response_model=Account)
 def update_account(
@@ -272,10 +271,10 @@ def update_account(
         # defensively typed even though Pydantic already validated it.
         row.excluded_keys = sorted({str(k) for k in excluded_keys if k})
         sync_service.recompute_balance_from_snapshot(db, row)
+
     db.commit()
     db.refresh(row)
     return account_to_model(row)
-
 
 @router.delete("/{account_id}", status_code=204)
 def delete_account(
@@ -284,5 +283,9 @@ def delete_account(
     db: Session = Depends(get_db),
 ) -> None:
     row = _get_owned(db, user.id, account_id)
+    was_active = row.status == "active"
     db.delete(row)
+    db.flush()
+    if was_active:
+        _record_active_total_snapshot(db, user.id)
     db.commit()

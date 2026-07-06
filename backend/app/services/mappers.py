@@ -11,6 +11,7 @@ def account_to_model(row: m.AccountRow) -> Account:
         id=row.id,
         name=row.name,
         source=row.source,  # type: ignore[arg-type]
+        status=row.status,  # type: ignore[arg-type]
         addr=row.addr,
         group=row.group_name,
         bal=row.bal,

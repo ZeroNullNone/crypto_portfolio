@@ -17,7 +17,7 @@ UNASSIGNED_COLOR = "#8a8376"
 
 def _aggregate(db: Session, user_id: str) -> dict[str, tuple[float, float, int]]:
     agg: dict[str, tuple[float, float, int]] = {}
-    for row in db.query(m.AccountRow).filter(m.AccountRow.user_id == user_id).all():
+    for row in db.query(m.AccountRow).filter(m.AccountRow.user_id == user_id, m.AccountRow.status == "active").all():
         key = row.group_name.lower()
         bal, wd, n = agg.get(key, (0.0, 0.0, 0))
         agg[key] = (bal + row.bal, wd + row.bal * row.d, n + 1)

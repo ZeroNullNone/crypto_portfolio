@@ -5,7 +5,7 @@ import { fmt$k, sensitiveDigits } from "../lib/format";
 import { useApi } from "../hooks/useApi";
 import { SYNC_ALL_CONFIRM, SyncButton } from "../components/SyncButton";
 import { useTranslation } from "../i18n/useTranslation";
-import type { BalancePoint } from "../types";
+import type { Account, BalancePoint } from "../types";
 import type { StackedSeries } from "../lib/charts";
 
 const RANGES = ["24H", "7D", "30D", "90D", "YTD", "ALL"];
@@ -34,6 +34,7 @@ export function Balance() {
   const [range, setRange] = useState("30D");
   const [view, setView] = useState<BalanceView>("line");
   const accounts = useApi(() => api.listAccounts(), [], "accounts:list");
+  const allAccounts = useApi(() => api.listAccounts({ status: "all" }), [], "accounts:list:all");
   const history = useApi(
     () => api.balanceHistory(range),
     [range],
@@ -41,9 +42,11 @@ export function Balance() {
   );
   const allHistory = useApi(() => api.balanceHistory("ALL"), [], "balance:history:ALL");
   const chartTotal = view === "calendar" ? (allHistory.data?.total ?? []) : (history.data?.total ?? []);
+  const calendarAccountSeries = view === "calendar" ? (allHistory.data?.per_account ?? {}) : {};
 
   const refreshAfterSync = () => {
     accounts.refetch();
+    allAccounts.refetch();
     history.refetch();
     allHistory.refetch();
   };
@@ -125,6 +128,8 @@ export function Balance() {
             <BalanceHistoryChart
               view={view}
               total={chartTotal}
+              accountSeries={calendarAccountSeries}
+              accounts={view === "calendar" ? (allAccounts.data ?? accounts.data ?? []) : (accounts.data ?? [])}
               stackSeries={stackSeries}
             />
           </div>
@@ -190,10 +195,14 @@ function toStackedSeries(record: Record<string, BalancePoint[]> | undefined): St
 function BalanceHistoryChart({
   view,
   total,
+  accountSeries,
+  accounts,
   stackSeries,
 }: {
   view: BalanceView;
   total: BalancePoint[];
+  accountSeries: Record<string, BalancePoint[]>;
+  accounts: Account[];
   stackSeries: StackedSeries[];
 }) {
   if (total.length < 1) return <ChartPlaceholder />;
@@ -207,7 +216,7 @@ function BalanceHistoryChart({
       <ChartPlaceholder />
     );
   }
-  if (view === "calendar") return <BalanceCalendar series={total} />;
+  if (view === "calendar") return <BalanceCalendar series={total} accountSeries={accountSeries} accounts={accounts} />;
   return <BalanceHeatmap series={total} />;
 }
 
@@ -269,7 +278,23 @@ function fmtSignedUsd(v: number): string {
   }));
 }
 
-function dailyBalanceRows(series: BalancePoint[]) {
+type DailyBalanceRow = {
+  key: string;
+  day: Date;
+  balance: number;
+  time: number;
+  change: number;
+  pct: number;
+};
+
+type AccountChange = {
+  id: string;
+  name: string;
+  change: number;
+  balance: number;
+};
+
+function dailyBalanceRows(series: BalancePoint[]): DailyBalanceRow[] {
   const daily = new Map<string, { key: string; day: Date; balance: number; time: number }>();
   for (const point of [...series].sort((a, b) => new Date(a.t).getTime() - new Date(b.t).getTime())) {
     const d = new Date(point.t);
@@ -294,6 +319,60 @@ function dailyBalanceRows(series: BalancePoint[]) {
         pct: prev > 0 ? (change / prev) * 100 : 0,
       };
     });
+}
+
+function accountChangesByDay(
+  rows: DailyBalanceRow[],
+  accountSeries: Record<string, BalancePoint[]>,
+  accounts: Pick<Account, "id" | "name">[],
+): Map<string, AccountChange[]> {
+  const byDay = new Map<string, AccountChange[]>();
+  const knownAccountIds = new Set(accounts.map((account) => account.id));
+  const accountList = [
+    ...accounts,
+    ...Object.keys(accountSeries)
+      .filter((id) => !knownAccountIds.has(id))
+      .map((id) => ({ id, name: id })),
+  ];
+
+  for (const account of accountList) {
+    const points = [...(accountSeries[account.id] ?? [])]
+      .map((point) => ({
+        time: new Date(point.t).getTime(),
+        balance: point.v,
+      }))
+      .filter((point) => Number.isFinite(point.time))
+      .sort((a, b) => a.time - b.time);
+
+    let cursor = 0;
+    let balance = 0;
+    let previousBalance: number | null = null;
+
+    for (const row of rows) {
+      while (cursor < points.length && points[cursor].time <= row.time) {
+        balance = points[cursor].balance;
+        cursor += 1;
+      }
+      const previous = previousBalance ?? balance;
+      const change = Math.round((balance - previous) * 100) / 100;
+      previousBalance = balance;
+      if (balance <= 0 && change === 0) continue;
+      byDay.set(row.key, [
+        ...(byDay.get(row.key) ?? []),
+        { id: account.id, name: account.name, change, balance },
+      ]);
+    }
+  }
+
+  for (const [key, changes] of byDay) {
+    byDay.set(
+      key,
+      changes.sort(
+        (a, b) => Math.abs(b.change) - Math.abs(a.change) || b.balance - a.balance || a.name.localeCompare(b.name),
+      ),
+    );
+  }
+  return byDay;
 }
 
 function BalanceHeatmap({ series }: { series: BalancePoint[] }) {
@@ -325,9 +404,20 @@ function BalanceHeatmap({ series }: { series: BalancePoint[] }) {
   );
 }
 
-function BalanceCalendar({ series }: { series: BalancePoint[] }) {
+function BalanceCalendar({
+  series,
+  accountSeries,
+  accounts,
+}: {
+  series: BalancePoint[];
+  accountSeries: Record<string, BalancePoint[]>;
+  accounts: Account[];
+}) {
   const t = useTranslation();
   const rows = dailyBalanceRows(series);
+  const accountChanges = useMemo(() => accountChangesByDay(rows, accountSeries, accounts), [rows, accountSeries, accounts]);
+  const [activeDay, setActiveDay] = useState<string | null>(null);
+  const [hoverDay, setHoverDay] = useState<string | null>(null);
   const months = useMemo(() => {
     const keys = [...new Set(rows.map((r) => monthKey(r.day)))];
     return keys.sort();
@@ -376,7 +466,10 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
               type="button"
               className="wbtn"
               disabled={!canPrev}
-              onClick={() => setSelectedMonth(shiftMonthKey(activeMonth, -1))}
+              onClick={() => {
+                setActiveDay(null);
+                setSelectedMonth(shiftMonthKey(activeMonth, -1));
+              }}
               aria-label={t.balance.prevMonth}
               title={t.balance.prevMonth}
               style={{ width: 30, height: 28, padding: 0, fontSize: 18, lineHeight: 1 }}
@@ -390,7 +483,10 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
               type="button"
               className="wbtn"
               disabled={!canNext}
-              onClick={() => setSelectedMonth(shiftMonthKey(activeMonth, 1))}
+              onClick={() => {
+                setActiveDay(null);
+                setSelectedMonth(shiftMonthKey(activeMonth, 1));
+              }}
               aria-label={t.balance.nextMonth}
               title={t.balance.nextMonth}
               style={{ width: 30, height: 28, padding: 0, fontSize: 18, lineHeight: 1 }}
@@ -439,29 +535,64 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
           gap: 8,
         }}
       >
-        {cells.map((cell) => {
+        {cells.map((cell, i) => {
           const inMonth = monthKey(cell.d) === activeMonth;
           const change = cell.point?.change ?? 0;
+          const showTooltip = inMonth && !!cell.point && (hoverDay === cell.key || activeDay === cell.key);
+          const breakdown = accountChanges.get(cell.key) ?? [];
+          const openUp = i >= cells.length - 14;
+          const col = i % 7;
+          const tooltipHorizontal =
+            col <= 1
+              ? { left: 0 }
+              : col >= 5
+                ? { right: 0 }
+                : { left: "50%", transform: "translateX(-50%)" };
           return (
             <div
               key={cell.key}
-              title={
-                cell.point
-                  ? `${cell.d.toLocaleDateString()} · ${fmtSignedUsd(cell.point.change)} · ${cell.point.pct >= 0 ? "+" : "-"}${Math.abs(cell.point.pct).toFixed(2)}%`
-                  : cell.d.toLocaleDateString()
+              role={cell.point && inMonth ? "button" : undefined}
+              tabIndex={cell.point && inMonth ? 0 : undefined}
+              aria-label={
+                cell.point && inMonth
+                  ? `${cell.d.toLocaleDateString()}: ${t.balance.changeYesterday} ${fmtSignedUsd(cell.point.change)}`
+                  : undefined
               }
+              aria-describedby={showTooltip ? `balance-calendar-tip-${cell.key}` : undefined}
+              onClick={() => {
+                if (!cell.point || !inMonth) return;
+                setActiveDay((current) => (current === cell.key ? null : cell.key));
+              }}
+              onKeyDown={(e) => {
+                if (!cell.point || !inMonth) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setActiveDay((current) => (current === cell.key ? null : cell.key));
+                }
+                if (e.key === "Escape") setActiveDay(null);
+              }}
+              onMouseEnter={() => {
+                if (cell.point && inMonth) setHoverDay(cell.key);
+              }}
+              onMouseLeave={() => setHoverDay(null)}
+              onFocus={() => {
+                if (cell.point && inMonth) setHoverDay(cell.key);
+              }}
+              onBlur={() => setHoverDay(null)}
               style={{
                 border: "1px solid rgba(26,24,20,0.12)",
                 borderRadius: 6,
                 background: cell.point && inMonth ? balanceCellColor(change, maxAbs) : "rgba(251,251,250,0.58)",
                 opacity: inMonth ? 1 : 0.34,
                 padding: "8px 6px",
+                position: "relative",
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: cell.point ? "center" : "flex-start",
                 gap: 5,
-                overflow: "hidden",
+                cursor: cell.point && inMonth ? "pointer" : "default",
+                boxShadow: showTooltip ? "inset 0 0 0 1.5px rgba(26, 24, 20, 0.35)" : undefined,
               }}
             >
               <div className="head" style={{ fontSize: 18, lineHeight: 1 }}>
@@ -480,6 +611,77 @@ function BalanceCalendar({ series }: { series: BalancePoint[] }) {
                   }}
                 >
                   {fmtSignedUsd(change)}
+                </div>
+              )}
+              {showTooltip && cell.point && (
+                <div
+                  id={`balance-calendar-tip-${cell.key}`}
+                  role="tooltip"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: "absolute",
+                    zIndex: "var(--z-tooltip)",
+                    top: openUp ? "auto" : "calc(100% + 8px)",
+                    bottom: openUp ? "calc(100% + 8px)" : "auto",
+                    width: "min(280px, calc(100vw - 32px))",
+                    maxHeight: 230,
+                    overflowY: "auto",
+                    padding: "10px 11px",
+                    border: "1.5px solid var(--line)",
+                    borderRadius: 6,
+                    background: "var(--surface)",
+                    boxShadow: "5px 5px 0 rgba(26, 24, 20, 0.16)",
+                    textAlign: "left",
+                    pointerEvents: activeDay === cell.key ? "auto" : "none",
+                    ...tooltipHorizontal,
+                  }}
+                >
+                  <div className="row between" style={{ gap: 12, alignItems: "baseline", flexWrap: "nowrap" }}>
+                    <span className="mono-xs">{t.balance.changeYesterday}</span>
+                    <span className={change >= 0 ? "accent-2" : "accent"} style={{ fontFamily: "var(--mono)", fontSize: 12 }}>
+                      {fmtSignedUsd(change)}
+                    </span>
+                  </div>
+                  <div className="tiny" style={{ marginTop: 3 }}>
+                    {cell.d.toLocaleDateString()}
+                  </div>
+                  <div style={{ borderTop: "1px solid rgba(26,24,20,0.14)", marginTop: 8, paddingTop: 7 }}>
+                    {breakdown.length > 0 ? (
+                      breakdown.map((item) => (
+                        <div
+                          key={item.id}
+                          className="row between"
+                          style={{ gap: 12, minHeight: 18, flexWrap: "nowrap" }}
+                        >
+                          <span
+                            style={{
+                              minWidth: 0,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              fontFamily: "var(--mono)",
+                              fontSize: 11,
+                              color: "var(--ink-2)",
+                            }}
+                          >
+                            {item.name}
+                          </span>
+                          <span
+                            className={item.change >= 0 ? "accent-2" : "accent"}
+                            style={{
+                              flexShrink: 0,
+                              fontFamily: "var(--mono)",
+                              fontSize: 11,
+                            }}
+                          >
+                            {fmtSignedUsd(item.change)}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="tiny">{t.balance.noAccountBreakdown}</div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

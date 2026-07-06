@@ -67,7 +67,7 @@ def summary(
     user: m.UserRow = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DashboardSummary:
-    accounts = db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id).all()
+    accounts = db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id, m.AccountRow.status == "active").all()
     total = sum(a.bal for a in accounts)
     sources: dict[str, int] = {}
     for a in accounts:
@@ -113,7 +113,7 @@ def top_assets(
     db: Session = Depends(get_db),
 ) -> list[TopAsset]:
     accounts = (
-        db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id).all()
+        db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id, m.AccountRow.status == "active").all()
     )
     account_ids = [a.id for a in accounts]
     if not account_ids:

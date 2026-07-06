@@ -1198,7 +1198,7 @@ def sync_account(db: Session, account: m.AccountRow) -> SyncResult:
 
 
 def sync_user_accounts(db: Session, user_id: str) -> list[SyncResult]:
-    accounts = db.query(m.AccountRow).filter(m.AccountRow.user_id == user_id).all()
+    accounts = db.query(m.AccountRow).filter(m.AccountRow.user_id == user_id, m.AccountRow.status == "active").all()
     results = [sync_account(db, a) for a in accounts]
     total = round(sum(a.bal for a in accounts), 2)
     db.add(m.TotalSnapshotRow(user_id=user_id, t=datetime.now(timezone.utc), v=total))
@@ -1210,7 +1210,7 @@ def estimate_user_sync(db: Session, user_id: str) -> dict[str, int]:
     """Preflight count for the sync-all confirmation dialog. ``remote_accounts``
     are the ones that hit a paid external API (onchain, non-mock)."""
     accounts = (
-        db.query(m.AccountRow).filter(m.AccountRow.user_id == user_id).all()
+        db.query(m.AccountRow).filter(m.AccountRow.user_id == user_id, m.AccountRow.status == "active").all()
     )
     remote = sum(1 for a in accounts if _hits_paid_api(a))
     return {

@@ -77,10 +77,11 @@ export const api = {
   deleteMe: () => http<void>("/api/auth/me", { method: "DELETE" }),
 
   // Accounts
-  listAccounts: (q?: { source?: string; group?: string }) => {
+  listAccounts: (q?: { source?: string; group?: string; status?: "active" | "inactive" | "all" }) => {
     const params = new URLSearchParams();
     if (q?.source) params.set("source", q.source);
     if (q?.group) params.set("group", q.group);
+    if (q?.status) params.set("status", q.status);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return http<Account[]>(`/api/accounts${suffix}`);
   },

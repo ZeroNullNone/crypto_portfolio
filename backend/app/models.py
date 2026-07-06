@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 SourceType = Literal["onchain", "exchange", "custom"]
+AccountStatus = Literal["active", "inactive"]
 CashflowKind = Literal["deposit", "withdraw"]
 
 
@@ -38,6 +39,7 @@ class Account(BaseModel):
     id: str
     name: str
     source: SourceType
+    status: AccountStatus = "active"
     addr: str
     group: str
     bal: float = 0.0
@@ -66,6 +68,7 @@ class CustomAsset(BaseModel):
 class AccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     source: SourceType
+    status: AccountStatus = "active"
     addr: str = Field(default="", max_length=256)
     group: str = Field(default="", max_length=64)
     chain: Optional[str] = Field(default=None, max_length=32)
@@ -76,6 +79,7 @@ class AccountCreate(BaseModel):
 class AccountUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     source: Optional[SourceType] = None
+    status: Optional[AccountStatus] = None
     addr: Optional[str] = Field(default=None, max_length=256)
     group: Optional[str] = Field(default=None, max_length=64)
     chain: Optional[str] = Field(default=None, max_length=32)

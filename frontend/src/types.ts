@@ -1,9 +1,11 @@
 export type SourceType = "onchain" | "exchange" | "custom";
+export type AccountStatus = "active" | "inactive";
 
 export interface Account {
   id: string;
   name: string;
   source: SourceType;
+  status: AccountStatus;
   addr: string;
   group: string;
   bal: number;
@@ -26,6 +28,7 @@ export interface CustomAssetInput {
 export interface AccountInput {
   name: string;
   source: SourceType;
+  status?: AccountStatus;
   addr: string;
   group: string;
   chain?: string | null;

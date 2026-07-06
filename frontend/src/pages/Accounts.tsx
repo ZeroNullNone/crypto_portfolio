@@ -21,6 +21,7 @@ import type {
 
 type FilterMode = "all" | "tok" | "pos";
 type HoldingsGroupBy = "assets" | "chain";
+type AccountStatusFilter = "active" | "inactive" | "all";
 
 type Selection =
   | { kind: "account"; id: string }
@@ -477,7 +478,8 @@ export function Accounts() {
   const navigate = useNavigate();
   const location = useLocation();
   const t = useTranslation();
-  const accounts = useApi(() => api.listAccounts(), [], "accounts:list");
+  const [statusFilter, setStatusFilter] = useState<AccountStatusFilter>("active");
+  const accounts = useApi(() => api.listAccounts({ status: "all" }), [], "accounts:list:all");
   const groups = useApi(() => api.listGroups(), [], "groups:list");
   const history = useApi(
     () => api.balanceHistory("ALL"),
@@ -511,8 +513,10 @@ export function Accounts() {
   >(null);
   // Pending account deletion — confirmed via ConfirmDialog.
   const [deleteAccount, setDeleteAccount] = useState<Account | null>(null);
+  const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [accountActionErr, setAccountActionErr] = useState<string | null>(null);
 
   // Hover + open-menu tracking so the "..." button is only visible on hover
   // (or while its dropdown is open, so it stays clickable).
@@ -572,9 +576,10 @@ export function Accounts() {
         return false;
       if (srcFilter !== "all" && a.source !== srcFilter) return false;
       if (grpFilter !== "all" && a.group !== grpFilter) return false;
+      if (statusFilter !== "all" && a.status !== statusFilter) return false;
       return true;
     });
-  }, [all, query, srcFilter, grpFilter]);
+  }, [all, query, srcFilter, grpFilter, statusFilter]);
 
   // Group accounts by their `group` field (lowercase key). Keep the order
   // from the groups API (user-defined), then append any groups that only
@@ -608,6 +613,14 @@ export function Accounts() {
     }
     return ordered;
   }, [filteredAccounts, gs]);
+
+  useEffect(() => {
+    if (!selection) return;
+    const stillVisible = selection.kind === "account"
+      ? filteredAccounts.some((a) => a.id === selection.id)
+      : grouped.some((g) => g.group.name === selection.name);
+    if (!stillVisible) setSelection(null);
+  }, [filteredAccounts, grouped, selection]);
 
   const toggleGroup = (name: string) => {
     setCollapsedGroups((prev) => {
@@ -889,8 +902,28 @@ export function Accounts() {
     groupDetails.refetch();
   };
 
+  const onSetAccountStatus = async (account: Account, status: "active" | "inactive") => {
+    if (status === "inactive" && Math.abs(account.bal || 0) >= 0.01) {
+      const ok = confirm(t.accounts.archiveNonZeroConfirm(account.name, fmt$(account.bal || 0)));
+      if (!ok) return;
+    }
+    setAccountActionErr(null);
+    try {
+      await api.updateAccount(account.id, { status });
+      if (status === "inactive" && activeAccountId === account.id) setSelection(null);
+      refreshAfterAccountChange();
+    } catch (e) {
+      const fallback = status === "inactive" ? t.accounts.archiveFailed : t.accounts.reactivateFailed;
+      setAccountActionErr(e instanceof Error ? e.message : fallback);
+    }
+  };
+
   const onConfirmDeleteAccount = async () => {
     if (!deleteAccount) return;
+    if (deleteStep === 1) {
+      setDeleteStep(2);
+      return;
+    }
     setDeleting(true);
     setDeleteErr(null);
     try {
@@ -899,6 +932,7 @@ export function Accounts() {
       // remaining account on next render.
       if (activeAccountId === deleteAccount.id) setSelection(null);
       setDeleteAccount(null);
+      setDeleteStep(1);
       refreshAfterAccountChange();
     } catch (e) {
       const msg =
@@ -982,13 +1016,25 @@ export function Accounts() {
                 </option>
               ))}
             </select>
-            {(query !== "" || srcFilter !== "all" || grpFilter !== "all") && (
+            <select
+              className="winput"
+              style={{ width: 160 }}
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as AccountStatusFilter)}
+            >
+              <option value="active">{t.accounts.statusActive}</option>
+              <option value="inactive">{t.accounts.statusInactive}</option>
+              <option value="all">{t.accounts.statusAll}</option>
+            </select>
+            {accountActionErr && <span className="tiny accent">{accountActionErr}</span>}
+            {(query !== "" || srcFilter !== "all" || grpFilter !== "all" || statusFilter !== "active") && (
               <button
                 type="button"
                 onClick={() => {
                   setQuery("");
                   setSrcFilter("all");
                   setGrpFilter("all");
+                  setStatusFilter("active");
                 }}
                 style={{
                   background: "transparent",
@@ -1023,7 +1069,7 @@ export function Accounts() {
                 {grouped.map(({ group, accounts: members }) => {
                   const collapsed = collapsedGroups.has(group.name);
                   const groupTotal = members.reduce(
-                    (acc, m) => acc + (m.bal || 0),
+                    (acc, m) => acc + (m.status === "active" ? m.bal || 0 : 0),
                     0,
                   );
                   const isUnassigned = group.name.toLowerCase() === "unassigned";
@@ -1162,13 +1208,23 @@ export function Accounts() {
                               }}
                             >
                               <span
-                                style={{
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
+                                className="row"
+                                style={{ gap: 6, minWidth: 0, overflow: "hidden" }}
                               >
-                                {a.name}
+                                <span
+                                  style={{
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {a.name}
+                                </span>
+                                {a.status === "inactive" && (
+                                  <span className="chip" style={{ flexShrink: 0, opacity: isActive ? 0.82 : 1 }}>
+                                    {t.accounts.inactiveBadge}
+                                  </span>
+                                )}
                               </span>
                               <span
                                 className="row"
@@ -1196,10 +1252,15 @@ export function Accounts() {
                                           }),
                                       },
                                       {
+                                        label: a.status === "inactive" ? t.accounts.menuReactivate : t.accounts.menuArchive,
+                                        onClick: () => onSetAccountStatus(a, a.status === "inactive" ? "active" : "inactive"),
+                                      },
+                                      {
                                         label: t.accounts.menuDelete,
                                         danger: true,
                                         onClick: () => {
                                           setDeleteErr(null);
+                                          setDeleteStep(1);
                                           setDeleteAccount(a);
                                         },
                                       },
@@ -1302,6 +1363,9 @@ export function Accounts() {
                         <span className={"src " + detail.data.source}>
                           {detail.data.source}
                         </span>
+                        {detail.data.status === "inactive" && (
+                          <span className="chip" style={{ marginLeft: 6 }}>{t.accounts.inactiveBadge}</span>
+                        )}
                         <div
                           className="row"
                           style={{ gap: 10, alignItems: "center", marginTop: 4 }}
@@ -1309,12 +1373,22 @@ export function Accounts() {
                           <div className="head" style={{ fontSize: 28 }}>
                             {detail.data.name}
                           </div>
-                          <SyncButton
-                            sync={() => api.syncAccount(detail.data!.id)}
-                            onDone={refreshAfterSync}
-                            label={t.accounts.syncBtn}
-                            hideStatus={detail.data.source !== "custom"}
-                          />
+                          {detail.data.status === "active" ? (
+                            <SyncButton
+                              sync={() => api.syncAccount(detail.data!.id)}
+                              onDone={refreshAfterSync}
+                              label={t.accounts.syncBtn}
+                              hideStatus={detail.data.source !== "custom"}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="wbtn"
+                              onClick={() => onSetAccountStatus(detail.data!, "active")}
+                            >
+                              {t.accounts.menuReactivate}
+                            </button>
+                          )}
                           <button
                             className="wbtn"
                             onClick={() => setAddAssetsOpen(true)}
@@ -2000,9 +2074,9 @@ export function Accounts() {
         title={t.accounts.deleteAccountTitle}
         message={
           <>
-            {t.accounts.deleteAccountConfirmPrefix}
+            {deleteStep === 1 ? t.accounts.deleteAccountConfirmPrefix : t.accounts.deleteAccountFinalPrefix}
             <b>“{deleteAccount?.name}”</b>
-            {t.accounts.deleteAccountConfirmSuffix}
+            {deleteStep === 1 ? t.accounts.deleteAccountConfirmSuffix : t.accounts.deleteAccountFinalSuffix}
             {deleteErr && (
               <div
                 className="tiny"
@@ -2013,12 +2087,13 @@ export function Accounts() {
             )}
           </>
         }
-        confirmLabel={deleting ? t.common.loading : t.common.delete}
+        confirmLabel={deleting ? t.common.loading : deleteStep === 1 ? t.accounts.deleteContinue : t.accounts.deleteForever}
         cancelLabel={t.common.cancel}
         danger
         onCancel={() => {
           if (deleting) return;
           setDeleteAccount(null);
+          setDeleteStep(1);
           setDeleteErr(null);
         }}
         onConfirm={onConfirmDeleteAccount}

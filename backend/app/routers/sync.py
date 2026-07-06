@@ -45,7 +45,7 @@ def sync_all(
     results = sync_service.sync_user_accounts(db, user.id)
     total = sum(
         a.bal
-        for a in db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id).all()
+        for a in db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id, m.AccountRow.status == "active").all()
     )
     return SyncSummary(
         results=results,
@@ -65,6 +65,8 @@ def sync_one(
     account = db.get(m.AccountRow, account_id)
     if account is None or account.user_id != user.id:
         raise HTTPException(status_code=404, detail="Account not found")
+    if account.status != "active":
+        raise HTTPException(status_code=400, detail="Inactive accounts cannot be synced")
     # Plain custom accounts are local-only. Custom accounts with
     # price_source="api" hit CoinMarketCap, so they share the sync throttle.
     # Skip the throttle for an account's first sync — the "create new account"
@@ -83,7 +85,7 @@ def sync_one(
     total = round(
         sum(
             a.bal
-            for a in db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id).all()
+            for a in db.query(m.AccountRow).filter(m.AccountRow.user_id == user.id, m.AccountRow.status == "active").all()
         ),
         2,
     )

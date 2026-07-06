@@ -93,6 +93,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _migrate_source_values()
+    _migrate_account_status()
     # Must run BEFORE any code below that does ORM reads on `accounts` —
     # SQLAlchemy issues SELECT * style queries that include every mapped
     # column, so the new excluded_keys column has to exist first.
@@ -119,6 +120,27 @@ def _migrate_source_values() -> None:
             conn.execute(
                 text("UPDATE accounts SET source = :new WHERE source = :old"),
                 {"new": new, "old": old},
+            )
+
+
+def _migrate_account_status() -> None:
+    if DATABASE_URL.startswith("sqlite"):
+        with engine.begin() as conn:
+            cols = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(accounts)")).fetchall()
+            }
+            if "status" not in cols:
+                conn.execute(
+                    text("ALTER TABLE accounts ADD COLUMN status VARCHAR NOT NULL DEFAULT 'active'")
+                )
+    else:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS "
+                    "status VARCHAR NOT NULL DEFAULT 'active'"
+                )
             )
 
 
