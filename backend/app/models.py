@@ -101,6 +101,8 @@ class Holding(BaseModel):
     amt: str
     price: str
     usd: float
+    # Unrounded wallet value retained for balance recalculation.
+    balance_usd: Optional[float] = None
     d: float
     c: str
     apr: Optional[str] = None

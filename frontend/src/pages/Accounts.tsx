@@ -197,6 +197,7 @@ const UNASSIGNED_FALLBACK: Group = {
 const HIDE_THRESHOLD_USD = 1;
 const EXCHANGE_CHAIN_PREFIXES = [
   "binance",
+  "bingx",
   "bybit",
   "bitget",
   "okx",

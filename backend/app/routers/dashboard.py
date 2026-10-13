@@ -12,7 +12,7 @@ from ..auth import current_user
 from ..db import get_db
 from ..integrations.bnm import BnmRateUnavailable, fetch_lowest_usd_myr_rate
 from ..models import DashboardSummary, TopAsset
-from ..services.sync import holding_key
+from ..services.sync import holding_equity, holding_key
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -141,7 +141,7 @@ def top_assets(
                 continue
             if excluded and holding_key(h) in excluded:
                 continue
-            usd = float(h.get("usd", 0) or 0)
+            usd = holding_equity(h)
             if usd <= 0:
                 continue
             if h.get("kind") == "pos":

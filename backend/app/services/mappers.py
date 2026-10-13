@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .. import db_models as m
 from ..models import Account, AccountDetail, Holding
-from .sync import holding_key
+from .sync import holding_key, is_bingx_position
 
 
 def account_to_model(row: m.AccountRow) -> Account:
@@ -30,6 +30,8 @@ def account_to_detail(row: m.AccountRow) -> AccountDetail:
     if row.snapshot is not None:
         raw_holdings = row.snapshot.holdings or []
         for h in raw_holdings:
+            if is_bingx_position(h):
+                continue
             key = holding_key(h)
             holdings.append(
                 Holding(**h, excluded=key in excluded_set, key=key)

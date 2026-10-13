@@ -430,6 +430,8 @@ export const en = {
     credentialsTip:
       "Credentials are stored in the backend database and only used server-side to call the exchange API.",
     serverSide: "🔒 stored server-side, never shown back to the UI",
+    bingxCoverage: "Read-only API key + secret. Tracks Spot balances and USDT perpetual account equity only, without individual contract positions; separate Fund, Earn, USDC futures and other products are excluded. USDT is valued at USD 1. Enable Read access for both supported wallets and allow this server's IP if restricted.",
+    cleanupFailed: (id: string) => `Could not remove the incomplete account (${id}). Retry to clean it up before adding, or remove it from Accounts.`,
     keepSavedSuffix: " — leave blank to keep saved value",
     fieldApiKey: "API key",
     fieldApiSecret: "API secret",
@@ -475,7 +477,7 @@ export const en = {
     missingCred: (s: string, list: string) => `missing credential${s}: ${list}`,
     customAssetInvalid:
       "each asset needs a symbol plus numeric amount and unit price (or leave the row blank)",
-    couldntLoad: (msg: string) => `Couldn't load data for this account: ${msg}. Account was not added.`,
+    couldntLoad: (msg: string) => `Couldn't load data for this account: ${msg}`,
     confirmDelete: (name: string) => `Remove account ${name}?`,
     confirmDeleteFinal: (name: string) => `Permanently delete ${name} and its account history?`,
     deleteFailed: "delete failed",

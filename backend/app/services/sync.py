@@ -69,12 +69,29 @@ def holding_key(h: dict[str, Any]) -> str:
     return f"tok:{chain}:{sym}"
 
 
+def is_bingx_position(h: dict[str, Any]) -> bool:
+    """Identify exposure rows saved by the earlier BingX implementation."""
+    return h.get("kind") == "pos" and h.get("chain") == "bingx"
+
+
+def holding_equity(h: dict[str, Any]) -> float:
+    """Owned wallet value, excluding any previously saved BingX exposure.
+
+    BingX retains unrounded ledger values, including dust, alongside display
+    values. Legacy holdings keep their existing equity semantics.
+    """
+    if is_bingx_position(h):
+        return 0.0
+    value = h.get("balance_usd")
+    return float(value if value is not None else h.get("usd", 0.0) or 0.0)
+
+
 def _excluded_usd(holdings: list[dict[str, Any]], excluded_keys: list[str]) -> float:
     if not excluded_keys:
         return 0.0
     keys = set(excluded_keys)
     return sum(
-        float(h.get("usd", 0.0) or 0.0)
+        holding_equity(h)
         for h in holdings
         if isinstance(h, dict) and holding_key(h) in keys
     )
@@ -713,7 +730,7 @@ def _build_cex_holdings(
         amount = v["amount"]
         usd = v["usd"]
         price = v["price"] or (usd / amount if amount > 0 and usd > 0 else 0.0)
-        if usd < _MIN_HOLDING_USD:
+        if usd < _MIN_HOLDING_USD and exchange != "bingx":
             continue
         out.append({
             "kind": "tok",
@@ -724,6 +741,7 @@ def _build_cex_holdings(
             "amt": _fmt_amount(amount),
             "price": _fmt_price(price),
             "usd": round(usd, 2),
+            **({"balance_usd": usd} if exchange == "bingx" else {}),
             "d": 0.0,
             "c": _color_for(sym),
             "logo": None,
@@ -852,7 +870,9 @@ def apply_custom_assets(
             h for h in (snap.holdings or [])
             if isinstance(h, dict) and h.get("chain") != "custom"
         ]
-        base_bal = sum(float(h.get("usd", 0.0) or 0.0) for h in base_rows)
+        old_custom = sum(holding_equity(h) for h in (snap.holdings or [])
+                         if isinstance(h, dict) and h.get("chain") == "custom")
+        base_bal = _snapshot_raw_balance(snap, account.excluded_keys or []) - old_custom
         provider = snap.provider or ""
     _persist_snapshot(db, account, base_bal, provider, holdings=base_rows)
 
@@ -891,7 +911,7 @@ def _is_mock_address(addr: str) -> bool:
     return "…" in addr or "..." in addr
 
 
-_KNOWN_EXCHANGES = ("binance", "bitget", "okx", "bybit", "gate", "extended", "derive")
+_KNOWN_EXCHANGES = ("binance", "bingx", "bitget", "okx", "bybit", "gate", "extended", "derive")
 
 
 def _infer_exchange(addr: str, explicit: str | None = None) -> str | None:
@@ -988,7 +1008,19 @@ def _persist_snapshot(
     )
 
 
-def recompute_balance_from_snapshot(db: Session, account: m.AccountRow) -> None:
+def _snapshot_raw_balance(snap: m.AccountSnapshotRow, excluded_keys: list[str]) -> float:
+    if snap.provider == "bingx":
+        # This provider persists every ledger row before display filtering and
+        # rounding. Summing raw equity avoids losing dust when all is excluded.
+        return sum(holding_equity(h) for h in (snap.holdings or []) if isinstance(h, dict))
+    # Other providers may report authoritative totals larger than their visible
+    # rows. Preserve that total instead of adding informational position notional.
+    return float(snap.bal or 0.0) + _excluded_usd(snap.holdings or [], excluded_keys)
+
+
+def recompute_balance_from_snapshot(
+    db: Session, account: m.AccountRow, *, previous_excluded_keys: list[str]
+) -> None:
     """Re-derive ``account.bal`` from the existing snapshot's holdings using
     the account's current ``excluded_keys``. Used when the user toggles an
     exclusion — we don't want to write a new history row (that's reserved
@@ -998,11 +1030,7 @@ def recompute_balance_from_snapshot(db: Session, account: m.AccountRow) -> None:
     if snap is None:
         return
     holdings = snap.holdings or []
-    raw_bal = sum(
-        float(h.get("usd", 0.0) or 0.0)
-        for h in holdings
-        if isinstance(h, dict)
-    )
+    raw_bal = _snapshot_raw_balance(snap, previous_excluded_keys)
     excluded_usd = _excluded_usd(holdings, account.excluded_keys or [])
     effective_bal = max(raw_bal - excluded_usd, 0.0)
     account.bal = round(effective_bal, 2)

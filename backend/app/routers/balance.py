@@ -10,7 +10,7 @@ from .. import db_models as m
 from ..auth import current_user
 from ..db import get_db
 from ..models import BalanceHistory, BalancePoint
-from ..services.sync import holding_key
+from ..services.sync import holding_equity, holding_key
 
 router = APIRouter(prefix="/api/balance", tags=["balance"])
 
@@ -148,7 +148,7 @@ def history(
                     label = _asset_label(holding)
                     if label is None:
                         continue
-                    usd = float(holding.get("usd", 0) or 0)
+                    usd = holding_equity(holding)
                     if usd <= 0:
                         continue
                     asset_values[label] = asset_values.get(label, 0.0) + usd

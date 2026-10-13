@@ -30,6 +30,7 @@ interface ExchangeDef {
 
 const EXCHANGES: ExchangeDef[] = [
   { id: "binance", label: "Binance", fields: ["api_key", "api_secret"] },
+  { id: "bingx", label: "BingX", fields: ["api_key", "api_secret"] },
   { id: "bybit", label: "Bybit", fields: ["api_key", "api_secret"] },
   { id: "gate", label: "Gate", fields: ["api_key", "api_secret"] },
   { id: "bitget", label: "Bitget", fields: ["api_key", "api_secret", "passphrase"] },
@@ -157,6 +158,9 @@ export function EditAccountPanel({
   const [busy, setBusy] = useState(false);
   const [busyStage, setBusyStage] = useState<null | "saving" | "syncing">(null);
   const [err, setErr] = useState<string | null>(null);
+  // If rollback fails, retry deleting this exact new account before creating
+  // another. Never apply setup cleanup to an existing account being edited.
+  const [pendingCleanupId, setPendingCleanupId] = useState<string | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
 
   // Load existing credentials status when editing an exchange account, so we
@@ -247,11 +251,23 @@ export function EditAccountPanel({
 
     setBusy(true);
     setBusyStage("saving");
+    let createdId: string | null = null;
+    let setupComplete = false;
     try {
+      if (pendingCleanupId) {
+        try {
+          await api.deleteAccount(pendingCleanupId);
+        } catch (error) {
+          // It may already have been removed in another tab.
+          if (!(error instanceof ApiError && error.status === 404)) throw error;
+        }
+        setPendingCleanupId(null);
+      }
       const payload = buildAccountPayload();
       const saved = isNew
         ? await api.createAccount(payload)
         : await api.updateAccount(account!.id, payload);
+      if (isNew) createdId = saved.id;
 
       // For exchange type, persist creds if any field has a value (new entries
       // require all fields up front; edits are merge-style).
@@ -304,24 +320,32 @@ export function EditAccountPanel({
         }
 
         if (!syncOk) {
-          // Roll back — the account was created but we couldn't load its
-          // data, and the user asked that such accounts not be added.
-          try {
-            await api.deleteAccount(saved.id);
-          } catch {
-            // best-effort — surface the sync error to the user regardless
-          }
-          setErr(t.editAcct.couldntLoad(syncMsg));
-          return;
+          throw new Error(t.editAcct.couldntLoad(syncMsg));
         }
       }
 
+      setupComplete = true;
       onSaved(saved);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        setErr(t.editAcct.nameTaken(name.trim()));
-      } else if (e instanceof ApiError) setErr(e.message);
-      else setErr(e instanceof Error ? e.message : t.editAcct.saveFailed);
+      let message = e instanceof ApiError && e.status === 409
+        ? t.editAcct.nameTaken(name.trim())
+        : e instanceof Error ? e.message : t.editAcct.saveFailed;
+      if (createdId && !setupComplete) {
+        try {
+          await api.deleteAccount(createdId);
+          setPendingCleanupId(null);
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) {
+            setPendingCleanupId(null);
+          } else {
+            setPendingCleanupId(createdId);
+            message += ` ${t.editAcct.cleanupFailed(createdId)}`;
+          }
+        }
+      } else if (pendingCleanupId) {
+        message += ` ${t.editAcct.cleanupFailed(pendingCleanupId)}`;
+      }
+      setErr(message);
     } finally {
       setBusy(false);
       setBusyStage(null);
@@ -788,6 +812,11 @@ function ExchangeFields({
           </option>
         ))}
       </select>
+      {exchangeId === "bingx" && (
+        <p className="tiny" style={{ color: "var(--muted)", margin: "0 0 14px" }}>
+          {t.editAcct.bingxCoverage}
+        </p>
+      )}
 
       <div className="mono-xs mb-8">{t.editAcct.displayName}</div>
       <input

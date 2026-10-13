@@ -74,7 +74,7 @@ def _snapshot_out(row: m.AccountSnapshotHistoryRow) -> AccountSnapshot:
         synced_at=_as_utc(row.synced_at),
         provider=row.provider,
         editable=row.provider == "manual",
-        holdings=row.holdings or [],
+        holdings=[h for h in (row.holdings or []) if not sync_service.is_bingx_position(h)],
     )
 
 UNASSIGNED = "unassigned"
@@ -269,8 +269,9 @@ def update_account(
     if excluded_keys is not None:
         # De-dup + clamp to strings; the column is JSON so we keep this
         # defensively typed even though Pydantic already validated it.
+        previous_excluded_keys = list(row.excluded_keys or [])
         row.excluded_keys = sorted({str(k) for k in excluded_keys if k})
-        sync_service.recompute_balance_from_snapshot(db, row)
+        sync_service.recompute_balance_from_snapshot(db, row, previous_excluded_keys=previous_excluded_keys)
 
     db.commit()
     db.refresh(row)

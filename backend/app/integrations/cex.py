@@ -2524,6 +2524,10 @@ def fetch_derive_assets(wallet: dict[str, Any]) -> dict[str, Any]:
 
 def fetch_cex_assets(wallet: dict[str, Any]) -> dict[str, Any]:
     exchange = str(wallet.get("exchange", "") or "").strip().lower()
+    if exchange == "bingx":
+        from .bingx import fetch_bingx_assets
+
+        return fetch_bingx_assets(wallet)
     if exchange == "binance":
         return fetch_binance_assets(wallet)
     if exchange == "bitget":

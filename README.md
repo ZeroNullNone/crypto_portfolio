@@ -15,7 +15,7 @@ hosted billing, no email provider required.
 - **On-chain wallets** — EVM via Zerion or [DeBank](https://cloud.debank.com/)
   (wallet tokens **plus** DeFi positions: lending, LPs, staking, perps);
   Solana / Sui / Cosmos via [CoinStats](https://openapi.coinstats.app/).
-- **Exchanges & perp DEXs** — Binance · Bitget · OKX · Bybit · Gate ·
+- **Exchanges & perp DEXs** — Binance · BingX · Bitget · OKX · Bybit · Gate ·
   Hyperliquid · Derive · Extended. Keys are entered in the UI and stored
   **encrypted at rest**.
 - **Custom assets** — anything off-API (cold storage, OTC, vault shares), with
@@ -87,6 +87,26 @@ Health check: `GET /api/health`. Set `ENABLE_API_DOCS=1` for `/docs`.
 - **Per-account exchange keys** (entered in the UI): API key/secret/passphrase
   and wallet address/private key, stored encrypted in the DB with `SECRETS_KEY`.
   The API only ever returns `has_*` booleans, never the secret values.
+
+### BingX coverage
+
+Choose **Exchange → BingX** and enter a read-only API key and secret. Allow
+the backend server's IP if the key has an IP allowlist. No trading or withdrawal
+permission, passphrase, exchange SDK, or BingX environment variable is needed.
+
+- Tracks **Spot (free + locked)** and **USDT perpetual account equity**.
+- Shows wallet assets and account equity, matching the existing Binance/Bybit
+  presentation. Individual perpetual positions are not fetched or displayed.
+  USDT is valued at USD 1.
+- Excludes the separate Fund wallet, Earn, USDC/Coin-M/Standard Futures,
+  copy/grid products, demo VST, and automatic subaccount discovery.
+- Prices Spot holdings using BingX USDT quotes. A missing quote, required API
+  failure, ambiguous missing USDT account, or unsupported negative equity fails
+  sync and preserves the previous account snapshot, rather than saving a partial
+  portfolio. History starts with the first successful local sync.
+
+See [API sources](docs/bingx-api-research.md) and
+[validation evidence and remaining live checks](docs/bingx-validation.md).
 
 ## Notes
 

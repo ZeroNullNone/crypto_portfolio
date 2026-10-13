@@ -45,6 +45,7 @@ export interface Holding {
   amt: string;
   price: string;
   usd: number;
+  balance_usd?: number | null;
   d: number;
   c: string;
   apr?: string | null;

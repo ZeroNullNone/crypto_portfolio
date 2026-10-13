@@ -414,6 +414,8 @@ export const zh: TranslationDict = {
     credentialsTip:
       "凭据存储在后端数据库中,仅用于服务端调用交易所 API。",
     serverSide: "🔒 仅在服务端存储,不会在 UI 中回显",
+    bingxCoverage: "使用只读 API key 和 secret。仅追踪现货余额及 USDT 永续账户权益，不展示具体合约持仓；不含独立资金账户、Earn、USDC 合约及其他产品。USDT 按 1 美元计价。请开通这两个钱包的读取权限；如设有 IP 限制，需允许本服务器的 IP。",
+    cleanupFailed: (id: string) => `无法删除未完成的账户（${id}）。请重试以先清理该账户，或在账户列表中手动删除。`,
     keepSavedSuffix: " —— 留空则保留已保存的值",
     fieldApiKey: "API key",
     fieldApiSecret: "API secret",
@@ -459,7 +461,7 @@ export const zh: TranslationDict = {
     missingCred: (_s: string, list: string) => `缺少凭据:${list}`,
     customAssetInvalid: "每个资产需要代号、数字数量与单价(或留空整行)",
     couldntLoad: (msg: string) =>
-      `无法加载该账户的数据:${msg}。账户未添加。`,
+      `无法加载该账户的数据:${msg}`,
     confirmDelete: (name: string) => `移除账户 ${name}?`,
     confirmDeleteFinal: (name: string) => `永久删除账户 ${name} 及其账户历史?`,
     deleteFailed: "删除失败",
