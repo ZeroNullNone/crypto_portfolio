@@ -58,6 +58,42 @@ user, then set it back to `false` and restart.
 
 SQLite data is persisted to `./data` (mounted into the backend container).
 
+## Production deployment on a small server
+
+Set `PORTFOLIO_ORIGIN` in the server's `.env` and run `./deploy.sh` from the
+production checkout. Use Docker with BuildKit and a Compose version that supports
+`up --wait --wait-timeout`. The script builds the backend once for both the API
+and the sync worker, then builds the frontend. The running app stays in place
+while images are prepared. After that, the script takes its usual database
+backup and starts the services.
+
+The first backend build with this release still downloads Python packages.
+Later builds on the same builder reuse the install layer when possible; if it
+must run again, [BuildKit's pip cache mount](https://docs.docker.com/build/cache/optimize/#use-cache-mounts)
+can reuse earlier downloads. Removing the builder cache makes the next build
+cold again.
+
+**To avoid compiling on the server entirely**, build the images on another
+machine from a clean checkout of the commit being deployed. For example, for
+an x86-64 Linux server, with write access to your registry:
+
+```bash
+prefix=ghcr.io/your-org/crypto-portfolio
+revision=$(git rev-parse HEAD)
+docker buildx build --platform linux/amd64 -t "$prefix-backend:$revision" --push ./backend
+docker buildx build --platform linux/amd64 -t "$prefix-frontend:$revision" --push ./frontend
+```
+
+Then on the server, with read access to that registry:
+
+```bash
+./deploy.sh --prebuilt ghcr.io/your-org/crypto-portfolio
+```
+
+This mode pulls images tagged with the full Git commit after the fast-forward
+update. If either tag is missing, deployment stops before replacing any service.
+Use `linux/arm64` instead when building for an ARM64 server.
+
 ## Local development
 
 ```bash

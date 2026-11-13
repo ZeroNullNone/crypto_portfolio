@@ -1,5 +1,6 @@
 services:
   backend:
+    image: ${PORTFOLIO_BACKEND_IMAGE:-${COMPOSE_PROJECT_NAME}-backend}
     build: ./backend
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     env_file:
@@ -20,7 +21,7 @@ services:
       retries: 3
 
   auto-sync:
-    build: ./backend
+    image: ${PORTFOLIO_BACKEND_IMAGE:-${COMPOSE_PROJECT_NAME}-backend}
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
     command: ["python", "-m", "app.jobs.auto_sync_loop"]
     env_file:
@@ -35,6 +36,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    image: ${PORTFOLIO_FRONTEND_IMAGE:-${COMPOSE_PROJECT_NAME}-frontend}
     build: ./frontend
     depends_on:
       backend:

@@ -8,7 +8,9 @@ WORKDIR /app
 RUN addgroup --system app && adduser --system --ingroup app app
 
 COPY requirements.lock requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.lock -r requirements.txt
+# Keep HTTP responses and wheels on the builder, outside the runtime image.
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    python -m pip install --disable-pip-version-check -r requirements.lock -r requirements.txt
 
 COPY app/ ./app/
 RUN chown -R app:app /app
