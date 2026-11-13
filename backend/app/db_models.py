@@ -7,6 +7,7 @@ from typing import Any, Optional
 from sqlalchemy import (
     JSON,
     Boolean,
+    false,
     DateTime,
     Float,
     ForeignKey,
@@ -131,6 +132,7 @@ class CexCredentialRow(Base):
     account_id: Mapped[str] = mapped_column(
         String, ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
     )
+    include_subaccounts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     # exchange (bitget/okx/…) and wallet_address (public) are not secrets.
     exchange: Mapped[str] = mapped_column(String, nullable=False, default="")
     wallet_address: Mapped[str] = mapped_column(String, nullable=False, default="")

@@ -93,6 +93,8 @@ class AccountUpdate(BaseModel):
 
 
 class Holding(BaseModel):
+    member: Optional[str] = None
+    valuation_only: bool = False
     kind: Literal["tok", "pos"]
     sym: str
     name: str
@@ -113,9 +115,7 @@ class Holding(BaseModel):
     logo: Optional[str] = None
     proto_logo: Optional[str] = None
     chain_logo: Optional[str] = None
-    # Unformatted numbers — set only for `custom` source holdings so the
-    # "Add assets" UI can round-trip the user's original inputs without
-    # parsing the formatted `amt` / `price` strings.
+    # Unrounded quantities for editable assets and exchange balance aggregation.
     amt_raw: Optional[float] = None
     price_raw: Optional[float] = None
     # Only present on custom-source holdings. "api" means the server refreshes
@@ -241,6 +241,7 @@ class CashflowEntryCreate(BaseModel):
 # ── Credentials (CEX only — global keys come from env) ───────────────────
 
 class CexCredentialIn(BaseModel):
+    include_subaccounts: Optional[bool] = None
     model_config = ConfigDict(extra="forbid")
 
     exchange: str = Field(default="", max_length=32, pattern=r"^[A-Za-z0-9_-]*$")
@@ -251,6 +252,7 @@ class CexCredentialIn(BaseModel):
 
 
 class CexCredentialOut(BaseModel):
+    include_subaccounts: bool = False
     account_id: str
     account_name: str
     exchange: str

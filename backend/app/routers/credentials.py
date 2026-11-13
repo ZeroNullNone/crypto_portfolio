@@ -27,6 +27,7 @@ def _own_account(db: Session, user_id: str, account_id: str) -> m.AccountRow:
 def _cex_out(account: m.AccountRow, cred: m.CexCredentialRow | None) -> CexCredentialOut:
     return CexCredentialOut(
         account_id=account.id,
+        include_subaccounts=bool(cred and cred.include_subaccounts),
         account_name=account.name,
         exchange=cred.exchange if cred else "",
         has_api_key=bool(cred and cred.api_key),
@@ -87,6 +88,12 @@ def set_cex(
     if body.exchange and body.exchange != row.exchange:
         row.exchange = body.exchange
         changed = True
+    if body.include_subaccounts is not None:
+        if body.include_subaccounts and row.exchange not in {"bingx", "bybit", "binance"}:
+            raise HTTPException(status_code=400, detail="This exchange does not support subaccount sync.")
+        if body.include_subaccounts != bool(row.include_subaccounts):
+            row.include_subaccounts = body.include_subaccounts
+            changed = True
     for field in ("api_key", "api_secret", "passphrase", "wallet_address"):
         value = getattr(body, field)
         if value and value != getattr(row, field):

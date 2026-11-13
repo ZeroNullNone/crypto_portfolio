@@ -88,7 +88,30 @@ Health check: `GET /api/health`. Set `ENABLE_API_DOCS=1` for `/docs`.
   and wallet address/private key, stored encrypted in the DB with `SECRETS_KEY`.
   The API only ever returns `has_*` booleans, never the secret values.
 
-### BingX coverage
+### Track exchange subaccounts
+
+Open the master portfolio account's settings and enable **Include subaccounts**
+for BingX, Bybit, or Binance. Use a master API key with read access to the
+subaccounts. The switch defaults to off. Before enabling it, use **Set inactive**
+on any subaccounts already tracked separately; otherwise those balances will
+count twice in portfolio totals.
+
+In the exchange account's holdings, **accounts** shows the master and each
+subaccount with their wallets. **assets** shows one row per coin across those
+wallets, without account labels. **Valuation only** contributes to equity and
+appears under **All**, but not **Tokens**: the provider gave a value without
+identifying a coin quantity. These views track wallet balances and equity;
+they do not show individual open contracts.
+
+| Exchange | Coverage with Include subaccounts |
+| --- | --- |
+| BingX | The [BingX API](https://bingx-api.github.io/docs-v3/) provides separate master and subaccount wallet overviews. Spot balances are itemized; other subaccount wallets report USDT-equivalent values. The master's USDT perpetual wallet is itemized when available. |
+| Bybit | The master key reads the [member list](https://bybit-exchange.github.io/docs/v5/asset/total-members-assets) and each member's [asset overview](https://bybit-exchange.github.io/docs/v5/asset/balance/asset-overview). The overview endpoint does not support regional accounts. |
+| Binance | Subaccount Spot, enabled cross-margin (net of borrowing), and enabled USD-M and COIN-M futures equity are included. Subaccount Funding, Earn and other products are outside this integration. |
+
+If a required subaccount request fails, sync keeps the last successful snapshot.
+
+### BingX coverage with Include subaccounts off
 
 Choose **Exchange → BingX** and enter a read-only API key and secret. Allow
 the backend server's IP if the key has an IP allowlist. No trading or withdrawal

@@ -139,6 +139,7 @@ export function EditAccountPanel({
 
   // Exchange
   const [exchangeId, setExchangeId] = useState(deriveExchangeId(account));
+  const [scopeOverride, setScopeOverride] = useState<boolean | null>(null);
   const [credValues, setCredValues] = useState<Record<CredField, string>>({
     api_key: "",
     api_secret: "",
@@ -269,15 +270,19 @@ export function EditAccountPanel({
         : await api.updateAccount(account!.id, payload);
       if (isNew) createdId = saved.id;
 
+      const scopeChanged = accountType === "exchange" && ["bingx", "bybit", "binance"].includes(currentExchange.id)
+        && scopeOverride !== null && scopeOverride !== (existingCred?.include_subaccounts ?? false);
       // For exchange type, persist creds if any field has a value (new entries
       // require all fields up front; edits are merge-style).
       if (accountType === "exchange") {
         const hasAny = currentExchange.fields.some(
           (f) => credValues[f].trim().length > 0,
         );
-        if (isNew || hasAny) {
+        if (isNew || hasAny || scopeChanged) {
           const credPayload: CexCredentialInput = {
             exchange: currentExchange.id,
+            ...(["bingx", "bybit", "binance"].includes(currentExchange.id) && scopeOverride !== null
+              ? { include_subaccounts: scopeOverride } : {}),
             api_key: credValues.api_key.trim(),
             api_secret: credValues.api_secret.trim(),
             passphrase: credValues.passphrase.trim(),
@@ -292,7 +297,7 @@ export function EditAccountPanel({
       // gets skipped, roll back the just-created account.
       // Custom accounts have no remote sync; the balance was set inline
       // from the user-entered assets, so skip this guard.
-      if (isNew && accountType !== "custom") {
+      if ((isNew || (scopeChanged && saved.status === "active")) && accountType !== "custom") {
         setBusyStage("syncing");
         let syncOk = false;
         let syncMsg = "";
@@ -501,6 +506,8 @@ export function EditAccountPanel({
             credValues={credValues}
             patchCred={patchCred}
             existingCred={existingCred}
+            includeSubs={scopeOverride ?? existingCred?.include_subaccounts ?? false}
+            setIncludeSubs={setScopeOverride}
             name={name}
             setName={setName}
           />
@@ -766,6 +773,8 @@ function ExchangeFields({
   credValues,
   patchCred,
   existingCred,
+  includeSubs,
+  setIncludeSubs,
   name,
   setName,
 }: {
@@ -775,6 +784,8 @@ function ExchangeFields({
   credValues: Record<CredField, string>;
   patchCred: (f: CredField, v: string) => void;
   existingCred: CexCredentialStatus | null;
+  includeSubs: boolean;
+  setIncludeSubs: (enabled: boolean) => void;
   name: string;
   setName: (v: string) => void;
 }) {
@@ -812,9 +823,18 @@ function ExchangeFields({
           </option>
         ))}
       </select>
+      {["binance", "bybit", "bingx"].includes(exchangeId) && (
+        <div style={{ marginBottom: 14 }}>
+          <label><input type="checkbox" checked={includeSubs} onChange={(e) => setIncludeSubs(e.target.checked)} /> Include subaccounts</label>
+          <p className="tiny" style={{ marginTop: 4 }}>
+            Use a master read-only key. Deactivate any separately tracked subaccounts first to avoid counting their balances twice.
+            {exchangeId === "binance" && " Subaccount coverage: spot, cross margin, USD-M and COIN-M futures."}
+          </p>
+        </div>
+      )}
       {exchangeId === "bingx" && (
         <p className="tiny" style={{ color: "var(--muted)", margin: "0 0 14px" }}>
-          {t.editAcct.bingxCoverage}
+          {includeSubs ? "The master account includes Spot balances, USDT perpetual equity and other reported wallet estimates. Subaccount Spot balances are itemized; other wallets are valuation only. USDT is valued at USD 1. Read access is required." : t.editAcct.bingxCoverage}
         </p>
       )}
 

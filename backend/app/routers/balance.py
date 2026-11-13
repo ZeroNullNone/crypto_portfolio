@@ -52,6 +52,8 @@ def _display_group(name: str) -> str:
 
 
 def _asset_label(holding: dict) -> str | None:
+    if holding.get("valuation_only"):
+        return "Valuation only"
     if holding.get("kind") == "pos":
         proto = str(holding.get("proto") or "").strip()
         return proto if proto and proto != "—" else "Other DeFi"
@@ -149,7 +151,7 @@ def history(
                     if label is None:
                         continue
                     usd = holding_equity(holding)
-                    if usd <= 0:
+                    if usd == 0 or (usd < 0 and not holding.get("member")):
                         continue
                     asset_values[label] = asset_values.get(label, 0.0) + usd
 

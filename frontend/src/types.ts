@@ -37,6 +37,9 @@ export interface AccountInput {
 }
 
 export interface Holding {
+  member?: string | null;
+  valuation_only?: boolean;
+  componentKeys?: string[];
   kind: "tok" | "pos";
   sym: string;
   name: string;
@@ -179,6 +182,7 @@ export interface SyncEstimate {
 }
 
 export interface CexCredentialInput {
+  include_subaccounts?: boolean;
   exchange: string;
   api_key: string;
   api_secret: string;
@@ -187,6 +191,7 @@ export interface CexCredentialInput {
 }
 
 export interface CexCredentialStatus {
+  include_subaccounts: boolean;
   account_id: string;
   account_name: string;
   exchange: string;

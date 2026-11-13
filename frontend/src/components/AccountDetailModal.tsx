@@ -1,3 +1,5 @@
+import { displayHolding, exchangeAssets, familyExchange, valuationOnly } from "../lib/exchangeHoldings";
+import { ExchangeMemberRows } from "../components/ExchangeMemberRows";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../api";
@@ -370,19 +372,23 @@ export function AccountDetailModal({
   const holdings: Holding[] = detail.data?.holdings ?? [];
   const excludedKeys = detail.data?.excluded_keys ?? [];
   const excludedSet = useMemo(() => new Set(excludedKeys), [excludedKeys]);
-  const isExcluded = (h: Holding): boolean =>
+  const rawExcluded = (h: Holding): boolean =>
     h.key ? excludedSet.has(h.key) : !!h.excluded;
+  const isExcluded = (h: Holding) => h.componentKeys ? !!h.excluded : rawExcluded(h);
+  const familyView = detail.data?.source === "exchange"
+    && familyExchange(detail.data.provider ?? detail.data.addr.toLowerCase()) != null;
+  const displayRows = !familyView ? holdings : holdingsGroupBy === "assets"
+    ? exchangeAssets(holdings, rawExcluded) : holdings.map(displayHolding);
   const visibleHoldings = hideDust
-    ? holdings.filter(
-        (h) => Math.abs(h.usd) >= HIDE_THRESHOLD_USD || isExcluded(h),
-      )
-    : holdings;
-  const tokens = visibleHoldings.filter((h) => h.kind === "tok");
+    ? displayRows.filter(h => Math.abs(h.balance_usd ?? h.usd) >= HIDE_THRESHOLD_USD || isExcluded(h))
+    : displayRows;
+  const tokens = visibleHoldings.filter(h => h.kind === "tok" && !valuationOnly(h));
+  const assetRows = visibleHoldings.filter(h => h.kind === "tok" && (filter === "all" || !valuationOnly(h)));
+  const memberView = familyView && holdings.some(h => h.member);
   const positions = visibleHoldings.filter((h) => h.kind === "pos");
   const filteredVisibleHoldings =
     filter === "tok" ? tokens : filter === "pos" ? positions : visibleHoldings;
   const tokCount = tokens.length;
-  const posCount = positions.length;
   const protoGroups = useMemo(
     () => groupPositionsByProtocol(positions, isExcluded),
     [positions, excludedSet],
@@ -842,7 +848,7 @@ export function AccountDetailModal({
                       className={"pill" + (filter === "all" ? " active" : "")}
                       onClick={() => setFilter("all")}
                     >
-                      {t.accounts.filterAll} ({tokCount + posCount})
+                      {t.accounts.filterAll} ({visibleHoldings.length})
                     </span>
                     <span
                       className={"pill" + (filter === "tok" ? " active" : "")}
@@ -882,7 +888,11 @@ export function AccountDetailModal({
                     </tr>
 	                  </thead>
 	                  <tbody>
-	                    {holdingsGroupBy === "chain" &&
+	                    {holdingsGroupBy === "chain" && memberView && (
+                        <ExchangeMemberRows rows={filteredVisibleHoldings} label={accountBucketLabel}
+                          isExcluded={isExcluded} render={renderHoldingRow} />
+                      )}
+                      {holdingsGroupBy === "chain" && !memberView &&
 	                      chainGroups.map((g) => {
 	                        const collapsed = collapsedChains.has(g.chain);
 	                        const chainLabel = accountBucketLabel(g.chain);
@@ -946,7 +956,7 @@ export function AccountDetailModal({
 	                      })}
 	                    {holdingsGroupBy === "assets" &&
 	                      showTokens &&
-	                      tokens.map((r, i) => {
+	                      assetRows.map((r, i) => {
                         const ex = isExcluded(r);
                         return (
                           <tr key={`tok-${i}`} style={excludedRowStyle(ex)}>

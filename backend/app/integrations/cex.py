@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -1571,8 +1572,8 @@ def _bybit_request(
             return None, detail
         raise RuntimeError(f"Bybit request failed for {detail}")
 
-    code = str(payload.get("retCode", "") or "").strip()
-    if code and code != "0":
+    code = str(payload.get("retCode", "")).strip()
+    if code != "0":
         msg = str(payload.get("retMsg", "") or "unknown error").strip()
         detail = f"{request_path} API error ({code}): {msg}"
         if allow_failure:
@@ -1641,10 +1642,12 @@ def _fetch_bybit_asset_overview_assets(
         "/v5/asset/asset-overview",
         params={"valuationCurrency": "USD"},
     )
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) or not isinstance(result.get("list"), list):
         raise RuntimeError("Bybit asset overview returned malformed result")
 
-    total_usd = _to_float(result.get("totalEquity"))
+    total_usd = float(result["totalEquity"])
+    if not math.isfinite(total_usd):
+        raise RuntimeError("Bybit asset overview returned invalid total equity")
     raw_rows: list[dict[str, Any]] = []
     fallback_rows: list[dict[str, Any]] = []
     symbols: list[str] = []
@@ -1657,6 +1660,8 @@ def _fetch_bybit_asset_overview_assets(
         if not isinstance(coin_details, list) or not coin_details:
             return False
         rows = [row for row in coin_details if isinstance(row, dict)]
+        if any((r.get("extMap") or {}).get("equityUnit", r.get("coin")) != r.get("coin") for r in rows):
+            return False
         for row in rows:
             coin = str(row.get("coin", "") or "").strip().upper()
             amount = _to_float(row.get("equity"))
@@ -2524,6 +2529,11 @@ def fetch_derive_assets(wallet: dict[str, Any]) -> dict[str, Any]:
 
 def fetch_cex_assets(wallet: dict[str, Any]) -> dict[str, Any]:
     exchange = str(wallet.get("exchange", "") or "").strip().lower()
+    if wallet.get("include_subaccounts") and exchange in {"bingx", "binance", "bybit"}:
+        from . import subaccounts
+        fetch = {"bingx": subaccounts.fetch_bingx, "bybit": subaccounts.fetch_bybit,
+                 "binance": subaccounts.fetch_binance}[exchange]
+        return fetch(wallet)
     if exchange == "bingx":
         from .bingx import fetch_bingx_assets
 

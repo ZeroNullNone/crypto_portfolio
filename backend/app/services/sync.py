@@ -66,6 +66,9 @@ def holding_key(h: dict[str, Any]) -> str:
     if kind == "pos":
         proto = str(h.get("proto") or "")
         return f"pos:{chain}:{proto}:{sym}"
+    member = h.get("member")
+    if member and member != "Main account":
+        return f"member:{member}:tok:{chain}:{sym}"
     return f"tok:{chain}:{sym}"
 
 
@@ -709,42 +712,39 @@ def _build_cex_holdings(
     assets: list[dict[str, Any]], exchange: str
 ) -> list[dict[str, Any]]:
     """Merge CEX rows into the Holding shape while preserving wallet buckets."""
-    merged: dict[tuple[str, str], dict[str, float]] = {}
+    merged: dict[tuple[str, str, str, bool], list[float]] = {}
+    detailed = exchange in {"binance", "bybit", "bingx"}
     for a in assets or []:
         sym = str(a.get("symbol") or a.get("name") or "").upper()
         if not sym:
             continue
         chain = str(a.get("chain") or exchange).lower()
-        amount = float(a.get("amount", 0.0) or 0.0)
-        price = float(a.get("unit_price", 0.0) or 0.0)
-        usd = float(a.get("usd_value") or amount * price)
-        cur = merged.setdefault((sym, chain), {"amount": 0.0, "usd": 0.0, "price": 0.0})
-        cur["amount"] += amount
-        cur["usd"] += usd
-        # Keep any positive unit price we saw — CEX rows mix priced and
-        # unpriced entries (e.g. PM non-stable rows have no price).
-        if price > 0 and cur["price"] <= 0:
-            cur["price"] = price
-    out: list[dict[str, Any]] = []
-    for (sym, chain), v in merged.items():
-        amount = v["amount"]
-        usd = v["usd"]
-        price = v["price"] or (usd / amount if amount > 0 and usd > 0 else 0.0)
-        if usd < _MIN_HOLDING_USD and exchange != "bingx":
+        member = str(a.get("member") or "")
+        valuation = bool(a.get("valuation_only") or chain == "binance-summary"
+                         or (exchange == "bybit" and sym.startswith("BYBIT_")))
+        amount = float(a.get("amount") or 0)
+        price = float(a.get("unit_price") or 0)
+        value = a.get("usd_value")
+        usd = float(value if value is not None and (detailed or value) else amount * price)
+        cur = merged.setdefault((sym, chain, member, valuation), [0.0, 0.0, 0.0])
+        cur[0] += amount
+        cur[1] += usd
+        if price > 0 and not cur[2]:
+            cur[2] = price
+    out = []
+    for (sym, chain, member, valuation), (amount, usd, price) in merged.items():
+        if (not detailed and usd < _MIN_HOLDING_USD) or (usd == 0 and amount == 0):
             continue
+        price = price or (usd / amount if amount else 0.0)
         out.append({
-            "kind": "tok",
-            "sym": sym,
-            "name": sym,
-            "proto": "—",
-            "chain": chain,
-            "amt": _fmt_amount(amount),
-            "price": _fmt_price(price),
-            "usd": round(usd, 2),
-            **({"balance_usd": usd} if exchange == "bingx" else {}),
-            "d": 0.0,
-            "c": _color_for(sym),
-            "logo": None,
+            "kind": "tok", "sym": sym, "name": sym, "proto": "—", "chain": chain,
+            "amt": "—" if valuation else _fmt_amount(amount),
+            "price": "—" if valuation else _fmt_price(price),
+            "usd": round(usd, 2), "d": 0.0, "c": _color_for(sym), "logo": None,
+            **({"balance_usd": usd} if detailed else {}),
+            **({"amt_raw": amount, "price_raw": price} if detailed and not valuation else {}),
+            **({"member": member} if member else {}),
+            **({"valuation_only": True} if valuation else {}),
         })
     out.sort(key=lambda h: h.get("usd", 0.0), reverse=True)
     return out
@@ -934,6 +934,7 @@ def _cex_wallet(account: m.AccountRow, exchange: str, cred: m.CexCredentialRow) 
     return {
         "name": account.name,
         "exchange": exchange,
+        "include_subaccounts": bool(cred.include_subaccounts),
         "api_key": cred.api_key or "",
         "api_secret": cred.api_secret or "",
         "passphrase": cred.passphrase or "",
@@ -970,7 +971,7 @@ def _persist_snapshot(
     # holdings list is still stored verbatim in the snapshot so the UI can
     # show excluded rows greyed out instead of hiding them.
     excluded_usd = _excluded_usd(holdings or [], account.excluded_keys or [])
-    effective_bal = max(new_bal - excluded_usd, 0.0)
+    effective_bal = _effective_balance(new_bal - excluded_usd, holdings)
     prev_bal = account.bal or 0.0
     delta_pct = (
         round(((effective_bal - prev_bal) / prev_bal) * 100, 2) if prev_bal > 0 else 0.0
@@ -1008,10 +1009,19 @@ def _persist_snapshot(
     )
 
 
+def _has_member_equity(holdings: list) -> bool:
+    return any(isinstance(h, dict) and h.get("member") for h in holdings)
+
+
+def _effective_balance(value: float, holdings: list) -> float:
+    # A master and its subaccounts can have net debt after exclusions.
+    return value if _has_member_equity(holdings) else max(value, 0.0)
+
+
 def _snapshot_raw_balance(snap: m.AccountSnapshotRow, excluded_keys: list[str]) -> float:
-    if snap.provider == "bingx":
-        # This provider persists every ledger row before display filtering and
-        # rounding. Summing raw equity avoids losing dust when all is excluded.
+    if snap.provider == "bingx" or _has_member_equity(snap.holdings or []):
+        # These snapshots retain the full reconciled ledger, including dust
+        # and debt. Do not reconstruct it from a rounded headline balance.
         return sum(holding_equity(h) for h in (snap.holdings or []) if isinstance(h, dict))
     # Other providers may report authoritative totals larger than their visible
     # rows. Preserve that total instead of adding informational position notional.
@@ -1032,7 +1042,7 @@ def recompute_balance_from_snapshot(
     holdings = snap.holdings or []
     raw_bal = _snapshot_raw_balance(snap, previous_excluded_keys)
     excluded_usd = _excluded_usd(holdings, account.excluded_keys or [])
-    effective_bal = max(raw_bal - excluded_usd, 0.0)
+    effective_bal = _effective_balance(raw_bal - excluded_usd, holdings)
     account.bal = round(effective_bal, 2)
     snap.bal = account.bal
 

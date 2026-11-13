@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import create_engine, event, func, text
+from sqlalchemy import create_engine, event, func, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -92,6 +92,9 @@ def init_db() -> None:
     from . import db_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        if "include_subaccounts" not in {c["name"] for c in inspect(conn).get_columns("cex_credentials")}:
+            conn.execute(text("ALTER TABLE cex_credentials ADD COLUMN include_subaccounts BOOLEAN NOT NULL DEFAULT FALSE"))
     _migrate_source_values()
     _migrate_account_status()
     # Must run BEFORE any code below that does ORM reads on `accounts` —

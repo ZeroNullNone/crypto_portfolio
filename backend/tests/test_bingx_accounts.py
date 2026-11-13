@@ -106,6 +106,38 @@ class BingXAccountTests(unittest.TestCase):
         self.assertNotIn("BINGX", history["by_asset"])
         self.assertEqual(self.client.get("/api/dashboard/summary").json()["total"], 250)
 
+    def test_family_scope_is_opt_in_and_incomplete_sync_preserves_history(self):
+        self.assertEqual(self.sync_account()["balance"], 250)
+        route = f"/api/credentials/cex/{self.account_id}"
+        self.assertTrue(self.client.put(route, json={"include_subaccounts": True}).json()["include_subaccounts"])
+        self.assertEqual(self.sync_account()["balance"], 350)
+        holdings = self.detail()["holdings"]
+        usdt = [h for h in holdings if h["sym"] == "USDT"]
+        self.assertEqual(sum(h["amt_raw"] for h in usdt), 185)
+        self.assertEqual(len(set(h["key"] for h in usdt)), 3)
+        value = next(h for h in holdings if h["valuation_only"])
+        self.assertEqual((value["member"], value["balance_usd"], value["amt_raw"]), ("Subaccount 202", 65, None))
+        self.assertEqual(self.client.patch(f"/api/accounts/{self.account_id}", json={
+            "excluded_keys": [h["key"] for h in usdt]}).json()["bal"], 165)
+        before = self.detail()
+        self.failed_path = "/openApi/subAccount/v1/assets"
+        self.assertEqual(self.sync_account()["status"], "error")
+        self.assertEqual(self.detail(), before)
+        self.assertEqual(len(self.client.get(f"/api/accounts/{self.account_id}/snapshots").json()), 2)
+        self.assertFalse(self.client.put(route, json={"include_subaccounts": False}).json()["include_subaccounts"])
+
+    def test_family_exclusions_can_leave_net_debt_and_restore_exact_equity(self):
+        subs = self.data["/openApi/subAccount/v1/allAccountBalance"]["result"]
+        subs[1]["accountBalances"][0]["usdtBalance"] = "-65.006"
+        response = self.client.put(f"/api/credentials/cex/{self.account_id}", json={"include_subaccounts": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        balance = self.sync_account()["balance"]
+        self.assertEqual(balance, 219.99)
+        keys = [h["key"] for h in self.detail()["holdings"] if not h["valuation_only"]]
+        for selected, expected in [(keys, -65.01), ([], balance)]:
+            edit = self.client.patch(f"/api/accounts/{self.account_id}", json={"excluded_keys": selected})
+            self.assertAlmostEqual(edit.json()["bal"], expected)
+
     def test_wallet_exclusions_and_custom_edits_preserve_equity(self):
         self.sync_account()
         detail = self.detail()

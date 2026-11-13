@@ -142,9 +142,11 @@ def top_assets(
             if excluded and holding_key(h) in excluded:
                 continue
             usd = holding_equity(h)
-            if usd <= 0:
+            if usd == 0 or (usd < 0 and not h.get("member")):
                 continue
-            if h.get("kind") == "pos":
+            if h.get("valuation_only"):
+                key, label, display_name = "valuation", "Valuation only", "Valuation only"
+            elif h.get("kind") == "pos":
                 proto = str(h.get("proto") or "").strip()
                 if not proto or proto == "—":
                     proto = "Other DeFi"
@@ -165,7 +167,7 @@ def top_assets(
             cur["bal"] += usd
             cur["wd"] += usd * float(h.get("d", 0) or 0)
             cur["chains"].add(str(h.get("chain", "")))
-    total = sum(x["bal"] for x in agg.values())
+    total = sum(x["bal"] for x in agg.values() if x["bal"] > 0)
     filtered = [(k, info) for k, info in agg.items() if info["bal"] >= min_usd]
     rows = sorted(filtered, key=lambda kv: -kv[1]["bal"])
     out: list[TopAsset] = []

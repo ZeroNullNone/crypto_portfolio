@@ -219,18 +219,7 @@ def _asset(symbol: str, amount: Decimal, price: Decimal, chain: str,
             "unit_price": float(price), "usd_value": float(amount * price)}
 
 
-def fetch_bingx_assets(wallet: dict[str, Any]) -> dict[str, Any]:
-    client = _Client(str(wallet.get("api_key") or "").strip(), str(wallet.get("api_secret") or "").strip())
-    spot = client.get(SPOT_BALANCE)
-    if not isinstance(spot, dict):
-        raise BingXError("BingX returned invalid Spot balances.")
-    spot_rows = _rows(spot.get("balances"), "Spot balances")
-    balances = _rows(client.get(FUTURES_BALANCE), "perpetual balances")
-    usdt = [row for row in balances if row.get("asset") == "USDT"]
-    if len(usdt) != 1:
-        raise BingXError("BingX did not return one USDT perpetual balance; check account activation and Read permission.")
-    equity = _number(usdt[0].get("equity"), "USDT perpetual equity (negative equity is unsupported)", nonnegative=True)
-
+def _spot_assets(client: _Client, spot_rows: list[dict]) -> list[dict]:
     quantities = {}
     for row in spot_rows:
         symbol = _symbol(row.get("asset"))
@@ -243,7 +232,6 @@ def fetch_bingx_assets(wallet: dict[str, Any]) -> dict[str, Any]:
         quantities[symbol] = (free, locked)
     needs_prices = any(sym != "USDT" and free + locked > 0 for sym, (free, locked) in quantities.items())
     prices = {**(_prices(client) if needs_prices else {}), "USDT": Decimal(1)}
-    total = equity
     assets = []
     for symbol, (free, locked) in quantities.items():
         amount = free + locked
@@ -252,11 +240,29 @@ def fetch_bingx_assets(wallet: dict[str, Any]) -> dict[str, Any]:
         price = prices.get(symbol)
         if price is None:
             raise BingXError(f"BingX cannot price Spot asset {symbol}: no valid {symbol}-USDT quote.")
-        total += amount * price
         assets.append(_asset(symbol, amount, price, "bingx-spot", free, locked))
-    if equity:
-        # This is equity, not withdrawable cash. Do not fabricate margin availability.
-        assets.append(_asset("USDT", equity, Decimal(1), "bingx-usdm", Decimal(0), Decimal(0)))
+    return assets
 
-    return {"balance": float(total), "assets": assets,
+
+def _usdt_perpetual_assets(client: _Client) -> list[dict]:
+    balances = _rows(client.get(FUTURES_BALANCE), "perpetual balances")
+    usdt = [row for row in balances if row.get("asset") == "USDT"]
+    if len(usdt) != 1:
+        raise BingXError("BingX did not return one USDT perpetual balance; check account activation and Read permission.")
+    equity = _number(usdt[0].get("equity"), "USDT perpetual equity (negative equity is unsupported)", nonnegative=True)
+
+    # Equity includes unrealized P&L; margin availability is not provided here.
+    return [_asset("USDT", equity, Decimal(1), "bingx-usdm", Decimal(0), Decimal(0))] if equity else []
+
+
+def fetch_bingx_assets(wallet: dict[str, Any]) -> dict[str, Any]:
+    client = _Client(str(wallet.get("api_key") or "").strip(), str(wallet.get("api_secret") or "").strip())
+    spot = client.get(SPOT_BALANCE)
+    if not isinstance(spot, dict):
+        raise BingXError("BingX returned invalid Spot balances.")
+    spot_rows = _rows(spot.get("balances"), "Spot balances")
+    futures = _usdt_perpetual_assets(client)
+    assets = _spot_assets(client, spot_rows) + futures
+
+    return {"balance": sum(a["usd_value"] for a in assets), "assets": assets,
             "fetch_strategy": "bingx Spot + USDT perpetual equity; USDT valued at USD 1"}

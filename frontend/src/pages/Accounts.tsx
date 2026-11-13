@@ -1,3 +1,5 @@
+import { displayHolding, exchangeAssets, familyExchange, holdingKeys, valuationOnly } from "../lib/exchangeHoldings";
+import { ExchangeMemberRows } from "../components/ExchangeMemberRows";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api } from "../api";
@@ -108,7 +110,7 @@ function aggregateGroupHoldings(details: AccountDetail[]): Holding[] {
     const excluded = new Set(det.excluded_keys ?? []);
     for (const h of det.holdings) {
       if ((h.key && excluded.has(h.key)) || h.excluded) continue;
-      const aggKey = `${h.kind}|${h.chain}|${h.proto}|${h.sym}|${h.name}`;
+      const aggKey = JSON.stringify([h.kind, h.chain, h.proto, h.sym, h.name, h.member]);
       const existing = byKey.get(aggKey);
       if (!existing) {
         byKey.set(aggKey, { ...h, key: null, excluded: false });
@@ -116,6 +118,7 @@ function aggregateGroupHoldings(details: AccountDetail[]): Holding[] {
       }
       const totalUsd = existing.usd + h.usd;
       const weightedD = (existing.d || 0) * existing.usd + (h.d || 0) * h.usd;
+      existing.balance_usd = (existing.balance_usd ?? existing.usd) + (h.balance_usd ?? h.usd);
       existing.usd = totalUsd;
       existing.d = totalUsd !== 0 ? weightedD / totalUsd : 0;
       if (existing.amt_raw != null && h.amt_raw != null) {
@@ -724,22 +727,26 @@ export function Accounts() {
   // Per-asset exclusion is account-scoped — in group view, excluded rows are
   // already filtered out during aggregation, so nothing reads as "excluded"
   // here.
-  const isExcluded = (h: Holding): boolean => {
+  const rawExcluded = (h: Holding): boolean => {
     if (selectedSnapshot) return false;
     if (activeGroup) return false;
     return h.key ? excludedSet.has(h.key) : !!h.excluded;
   };
+  const isExcluded = (h: Holding) => h.componentKeys ? !!h.excluded : rawExcluded(h);
+  const familyView = !activeGroup && detail.data?.source === "exchange"
+    && familyExchange(detail.data.provider ?? detail.data.addr.toLowerCase()) != null;
+  const displayRows = !familyView ? holdings : holdingsGroupBy === "assets"
+    ? exchangeAssets(holdings, rawExcluded) : holdings.map(displayHolding);
   const visibleHoldings = hideDust
-    ? holdings.filter(
-        (h) => Math.abs(h.usd) >= HIDE_THRESHOLD_USD || isExcluded(h),
-      )
-    : holdings;
-  const tokens = visibleHoldings.filter((h) => h.kind === "tok");
+    ? displayRows.filter(h => Math.abs(h.balance_usd ?? h.usd) >= HIDE_THRESHOLD_USD || isExcluded(h))
+    : displayRows;
+  const tokens = visibleHoldings.filter(h => h.kind === "tok" && !valuationOnly(h));
+  const assetRows = visibleHoldings.filter(h => h.kind === "tok" && (filter === "all" || !valuationOnly(h)));
+  const memberView = familyView && holdings.some(h => h.member);
   const positions = visibleHoldings.filter((h) => h.kind === "pos");
   const filteredVisibleHoldings =
     filter === "tok" ? tokens : filter === "pos" ? positions : visibleHoldings;
   const tokCount = tokens.length;
-  const posCount = positions.length;
   const protoGroups = useMemo(
     () => groupPositionsByProtocol(positions, isExcluded),
     [positions, excludedSet],
@@ -757,8 +764,9 @@ export function Accounts() {
   const toggleExcluded = async (h: Holding) => {
     if (!detail.data || !h.key || busyExclusion) return;
     const next = new Set(excludedKeys);
-    if (next.has(h.key)) next.delete(h.key);
-    else next.add(h.key);
+    const keys = holdingKeys(h);
+    const include = keys.every(key => next.has(key));
+    for (const key of keys) { if (include) next.delete(key); else next.add(key); }
     const nextList = Array.from(next).sort();
     const accountId = detail.data.id;
     setOptimisticExcluded({ id: accountId, keys: nextList });
@@ -1640,7 +1648,7 @@ export function Accounts() {
                         className={"pill" + (filter === "all" ? " active" : "")}
                         onClick={() => setFilter("all")}
                       >
-                        {t.accounts.filterAll} ({tokCount + posCount})
+                        {t.accounts.filterAll} ({visibleHoldings.length})
                       </span>
                       <span
                         className={"pill" + (filter === "tok" ? " active" : "")}
@@ -1685,7 +1693,11 @@ export function Accounts() {
                       </tr>
 	                    </thead>
 	                    <tbody>
-	                      {holdingsGroupBy === "chain" &&
+	                      {holdingsGroupBy === "chain" && memberView && (
+                        <ExchangeMemberRows rows={filteredVisibleHoldings} label={accountBucketLabel}
+                          isExcluded={isExcluded} render={renderHoldingRow} actions />
+                      )}
+                      {holdingsGroupBy === "chain" && !memberView &&
 	                        chainGroups.map((g) => {
 	                          const collapsed = collapsedChains.has(g.chain);
 	                          const chainLabel = accountBucketLabel(g.chain);
@@ -1750,7 +1762,7 @@ export function Accounts() {
 	                        })}
 	                      {holdingsGroupBy === "assets" &&
 	                        showTokens &&
-	                        tokens.map((r, i) => {
+	                        assetRows.map((r, i) => {
                           const ex = isExcluded(r);
                           return (
                             <tr key={`tok-${i}`} style={excludedRowStyle(ex)}>
